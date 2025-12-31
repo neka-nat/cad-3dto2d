@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable
+import math
+from typing import Iterable, Literal
 
 from build123d import Compound, Line
 from pydantic import BaseModel, ConfigDict
@@ -17,6 +18,8 @@ class DimensionSettings(BaseModel):
     text_height: float = 3.5
     text_gap: float = 1.0
     decimal_places: int = 1
+    diameter_symbol: str = "D"
+    pitch_prefix: str = "P"
 
 
 def _default_settings(size_x: float, size_y: float) -> DimensionSettings:
@@ -28,6 +31,8 @@ def _default_settings(size_x: float, size_y: float) -> DimensionSettings:
         text_height=max(2.5, size_ref * 0.04),
         text_gap=max(1.0, size_ref * 0.02),
         decimal_places=1,
+        diameter_symbol="D",
+        pitch_prefix="P",
     )
 
 
@@ -60,8 +65,11 @@ class DimensionResult(BaseModel):
     lines: list[Line]
     texts: list[DimensionText]
 
+DimensionOrientation = Literal["horizontal", "vertical"]
+DimensionSide = Literal["top", "bottom", "left", "right"]
 
-def _format_length(value: float, decimal_places: int) -> str:
+
+def format_length(value: float, decimal_places: int) -> str:
     if decimal_places <= 0:
         return str(int(round(value)))
     text = f"{value:.{decimal_places}f}"
@@ -86,56 +94,179 @@ def _arrow_head_vertical(x: float, y: float, arrow_size: float, direction: float
     ]
 
 
-def _horizontal_dimension(
-    x1: float,
-    x2: float,
-    base_y: float,
+def _arrow_head_angle(
+    x: float,
+    y: float,
+    direction: tuple[float, float],
+    arrow_size: float,
+) -> list[Line]:
+    dx, dy = direction
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return []
+    dx /= length
+    dy /= length
+    base_x = x + dx * arrow_size
+    base_y = y + dy * arrow_size
+    perp_x, perp_y = -dy, dx
+    half = arrow_size / 2
+    return [
+        Line((x, y, 0), (base_x + perp_x * half, base_y + perp_y * half, 0)),
+        Line((x, y, 0), (base_x - perp_x * half, base_y - perp_y * half, 0)),
+    ]
+
+
+def generate_diameter_dimension(
+    center: tuple[float, float],
+    radius: float,
+    leader_angle_deg: float,
+    settings: DimensionSettings | None = None,
+    leader_length: float | None = None,
+    label: str | None = None,
+) -> DimensionResult:
+    settings = settings or _default_settings(radius * 2, radius * 2)
+    angle_rad = math.radians(leader_angle_deg)
+    dir_x = math.cos(angle_rad)
+    dir_y = math.sin(angle_rad)
+    arrow_tip = (center[0] + dir_x * radius, center[1] + dir_y * radius)
+    if leader_length is None:
+        leader_length = settings.arrow_size * 4 + settings.text_gap * 2 + settings.text_height
+    leader_end = (arrow_tip[0] + dir_x * leader_length, arrow_tip[1] + dir_y * leader_length)
+    lines: list[Line] = []
+    leader_line = _maybe_line((arrow_tip[0], arrow_tip[1], 0), (leader_end[0], leader_end[1], 0))
+    if leader_line:
+        lines.append(leader_line)
+    lines.extend(_arrow_head_angle(arrow_tip[0], arrow_tip[1], (dir_x, dir_y), settings.arrow_size))
+
+    diameter_label = label or f"{settings.diameter_symbol}{format_length(radius * 2, settings.decimal_places)}"
+    text_pos = (
+        leader_end[0] + dir_x * settings.text_gap,
+        leader_end[1] + dir_y * settings.text_gap,
+    )
+    anchor = "start" if dir_x >= 0 else "end"
+    texts = [
+        DimensionText(
+            x=text_pos[0],
+            y=text_pos[1],
+            text=diameter_label,
+            height=settings.text_height,
+            anchor=anchor,
+        )
+    ]
+    return DimensionResult(lines=lines, texts=texts)
+
+
+def _horizontal_dimension_from_points(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    side: DimensionSide,
     offset: float,
     settings: DimensionSettings,
 ) -> list[Line]:
+    (x1, y1), (x2, y2) = p1, p2
     if x2 < x1:
         x1, x2 = x2, x1
-    gap = min(settings.extension_gap, abs(offset)) * (1.0 if offset >= 0 else -1.0)
-    dim_y = base_y + offset
-    ext_start = base_y + gap
-    lines: list[Line] = [
-        line
-        for line in (
-            _maybe_line((x1, ext_start, 0), (x1, dim_y, 0)),
-            _maybe_line((x2, ext_start, 0), (x2, dim_y, 0)),
-            _maybe_line((x1, dim_y, 0), (x2, dim_y, 0)),
-        )
-        if line
-    ]
+        y1, y2 = y2, y1
+    if side not in ("top", "bottom"):
+        raise ValueError(f"Invalid horizontal side: {side}")
+    sign = 1.0 if side == "top" else -1.0
+    base_y = max(y1, y2) if side == "top" else min(y1, y2)
+    dim_y = base_y + sign * abs(offset)
+    lines: list[Line] = []
+    for x, y in ((x1, y1), (x2, y2)):
+        gap = min(settings.extension_gap, abs(dim_y - y))
+        ext_start = y + sign * gap
+        line = _maybe_line((x, ext_start, 0), (x, dim_y, 0))
+        if line:
+            lines.append(line)
+    dim_line = _maybe_line((x1, dim_y, 0), (x2, dim_y, 0))
+    if dim_line:
+        lines.append(dim_line)
     lines.extend(_arrow_head_horizontal(x1, dim_y, settings.arrow_size, direction=1.0))
     lines.extend(_arrow_head_horizontal(x2, dim_y, settings.arrow_size, direction=-1.0))
     return lines
 
 
-def _vertical_dimension(
-    y1: float,
-    y2: float,
-    base_x: float,
+def _vertical_dimension_from_points(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    side: DimensionSide,
     offset: float,
     settings: DimensionSettings,
 ) -> list[Line]:
+    (x1, y1), (x2, y2) = p1, p2
     if y2 < y1:
+        x1, x2 = x2, x1
         y1, y2 = y2, y1
-    gap = min(settings.extension_gap, abs(offset)) * (1.0 if offset >= 0 else -1.0)
-    dim_x = base_x + offset
-    ext_start = base_x + gap
-    lines: list[Line] = [
-        line
-        for line in (
-            _maybe_line((ext_start, y1, 0), (dim_x, y1, 0)),
-            _maybe_line((ext_start, y2, 0), (dim_x, y2, 0)),
-            _maybe_line((dim_x, y1, 0), (dim_x, y2, 0)),
-        )
-        if line
-    ]
+    if side not in ("left", "right"):
+        raise ValueError(f"Invalid vertical side: {side}")
+    sign = 1.0 if side == "right" else -1.0
+    base_x = max(x1, x2) if side == "right" else min(x1, x2)
+    dim_x = base_x + sign * abs(offset)
+    lines: list[Line] = []
+    for x, y in ((x1, y1), (x2, y2)):
+        gap = min(settings.extension_gap, abs(dim_x - x))
+        ext_start = x + sign * gap
+        line = _maybe_line((ext_start, y, 0), (dim_x, y, 0))
+        if line:
+            lines.append(line)
+    dim_line = _maybe_line((dim_x, y1, 0), (dim_x, y2, 0))
+    if dim_line:
+        lines.append(dim_line)
     lines.extend(_arrow_head_vertical(dim_x, y1, settings.arrow_size, direction=1.0))
     lines.extend(_arrow_head_vertical(dim_x, y2, settings.arrow_size, direction=-1.0))
     return lines
+
+
+def generate_linear_dimension(
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    orientation: DimensionOrientation | None = None,
+    side: DimensionSide | None = None,
+    offset: float | None = None,
+    settings: DimensionSettings | None = None,
+    label: str | None = None,
+) -> DimensionResult:
+    settings = settings or _default_settings(abs(p2[0] - p1[0]), abs(p2[1] - p1[1]))
+    dx = abs(p2[0] - p1[0])
+    dy = abs(p2[1] - p1[1])
+    if orientation is None:
+        orientation = "horizontal" if dx >= dy else "vertical"
+    if orientation == "horizontal":
+        side = side or "top"
+        offset = abs(offset) if offset is not None else settings.offset
+        lines = _horizontal_dimension_from_points(p1, p2, side, offset, settings)
+        sign = 1 if side == "top" else -1
+        dim_y = (max(p1[1], p2[1]) if side == "top" else min(p1[1], p2[1])) + sign * offset
+        text = label or format_length(dx, settings.decimal_places)
+        texts = [
+            DimensionText(
+                x=(p1[0] + p2[0]) / 2,
+                y=dim_y + sign * settings.text_gap,
+                text=text,
+                height=settings.text_height,
+                anchor="middle",
+            )
+        ]
+        return DimensionResult(lines=lines, texts=texts)
+    if orientation == "vertical":
+        side = side or "right"
+        offset = abs(offset) if offset is not None else settings.offset
+        lines = _vertical_dimension_from_points(p1, p2, side, offset, settings)
+        sign = 1 if side == "right" else -1
+        dim_x = (max(p1[0], p2[0]) if side == "right" else min(p1[0], p2[0])) + sign * offset
+        text = label or format_length(dy, settings.decimal_places)
+        texts = [
+            DimensionText(
+                x=dim_x + sign * settings.text_gap,
+                y=(p1[1] + p2[1]) / 2,
+                text=text,
+                height=settings.text_height,
+                anchor="start" if side == "right" else "end",
+            )
+        ]
+        return DimensionResult(lines=lines, texts=texts)
+    raise ValueError(f"Unsupported orientation: {orientation}")
 
 
 def generate_basic_dimensions(
@@ -154,40 +285,32 @@ def generate_basic_dimensions(
     settings = settings or _default_settings(size.X, size.Y)
     xmin, ymin = bounds.min.X, bounds.min.Y
     xmax, ymax = bounds.max.X, bounds.max.Y
-    if horizontal_offset is None:
-        horizontal_offset = settings.offset * (1.0 if horizontal_dir >= 0 else -1.0)
-    if vertical_offset is None:
-        vertical_offset = settings.offset * (1.0 if vertical_dir >= 0 else -1.0)
-    base_y = ymax if horizontal_dir >= 0 else ymin
-    base_x = xmax if vertical_dir >= 0 else xmin
-    lines: list[Line] = []
-    texts: list[DimensionText] = []
+    horizontal_side: DimensionSide = "top" if horizontal_dir >= 0 else "bottom"
+    vertical_side: DimensionSide = "right" if vertical_dir >= 0 else "left"
+    if horizontal_offset is not None and horizontal_offset < 0:
+        horizontal_side = "bottom"
+        horizontal_offset = abs(horizontal_offset)
+    if vertical_offset is not None and vertical_offset < 0:
+        vertical_side = "left"
+        vertical_offset = abs(vertical_offset)
 
-    dim_y = base_y + horizontal_offset
-    dim_x = base_x + vertical_offset
-    lines.extend(_horizontal_dimension(xmin, xmax, base_y, horizontal_offset, settings))
-    lines.extend(_vertical_dimension(ymin, ymax, base_x, vertical_offset, settings))
+    horizontal_offset = horizontal_offset if horizontal_offset is not None else settings.offset
+    vertical_offset = vertical_offset if vertical_offset is not None else settings.offset
 
-    width_label = _format_length(xmax - xmin, settings.decimal_places)
-    height_label = _format_length(ymax - ymin, settings.decimal_places)
-    horizontal_sign = 1 if horizontal_dir >= 0 else -1
-    vertical_sign = 1 if vertical_dir >= 0 else -1
-    texts.append(
-        DimensionText(
-            x=(xmin + xmax) / 2,
-            y=dim_y + horizontal_sign * settings.text_gap,
-            text=width_label,
-            height=settings.text_height,
-            anchor="middle",
-        )
+    horizontal = generate_linear_dimension(
+        p1=(xmin, ymax if horizontal_side == "top" else ymin),
+        p2=(xmax, ymax if horizontal_side == "top" else ymin),
+        orientation="horizontal",
+        side=horizontal_side,
+        offset=horizontal_offset,
+        settings=settings,
     )
-    texts.append(
-        DimensionText(
-            x=dim_x + vertical_sign * settings.text_gap,
-            y=(ymin + ymax) / 2,
-            text=height_label,
-            height=settings.text_height,
-            anchor="start" if vertical_sign >= 0 else "end",
-        )
+    vertical = generate_linear_dimension(
+        p1=(xmax if vertical_side == "right" else xmin, ymin),
+        p2=(xmax if vertical_side == "right" else xmin, ymax),
+        orientation="vertical",
+        side=vertical_side,
+        offset=vertical_offset,
+        settings=settings,
     )
-    return DimensionResult(lines=lines, texts=texts)
+    return DimensionResult(lines=horizontal.lines + vertical.lines, texts=horizontal.texts + vertical.texts)

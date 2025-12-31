@@ -1,4 +1,5 @@
 import os
+import math
 from typing import Iterable
 
 from build123d import Compound, Edge, ShapeList, Wire, Face, import_step, import_svg
@@ -9,7 +10,20 @@ from .annotations.dimensions import (
     DimensionSettings,
     DimensionText,
     default_settings_from_size,
+    format_length,
     generate_basic_dimensions,
+    generate_diameter_dimension,
+    generate_linear_dimension,
+)
+from .annotations.features import extract_feature_coordinates, extract_primitives
+from .annotations.planner import (
+    PlannedDimension,
+    PlannedDiameterDimension,
+    PlanningRules,
+    apply_planning_rules,
+    group_circles_by_radius,
+    plan_hole_dimensions,
+    plan_internal_dimensions,
 )
 from .layout import layout_three_views
 from .styles import load_style
@@ -68,6 +82,30 @@ def _clamp_offset(
     return -min(offset, max(0.0, available))
 
 
+def _max_length_to_frame(
+    point: tuple[float, float],
+    direction: tuple[float, float],
+    frame_bounds: tuple[float, float, float, float],
+) -> float:
+    x0, y0 = point
+    dx, dy = direction
+    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
+    candidates: list[float] = []
+    if abs(dx) > 1e-9:
+        if dx > 0:
+            candidates.append((frame_max_x - x0) / dx)
+        else:
+            candidates.append((frame_min_x - x0) / dx)
+    if abs(dy) > 1e-9:
+        if dy > 0:
+            candidates.append((frame_max_y - y0) / dy)
+        else:
+            candidates.append((frame_min_y - y0) / dy)
+    if not candidates:
+        return 0.0
+    return max(0.0, min(candidates))
+
+
 def _build_layers(
     model,
     add_template: bool,
@@ -76,6 +114,7 @@ def _build_layers(
     y_offset: float,
     add_dimensions: bool,
     dimension_settings: DimensionSettings | None,
+    dimension_overrides: dict[str, object] | None,
 ) -> tuple[dict[str, list[Shape]], list[DimensionText]]:
     layers: dict[str, list[Shape]] = {}
     dim_texts: list[DimensionText] = []
@@ -104,13 +143,17 @@ def _build_layers(
             bounds = Compound(children=shapes).bounding_box()
             size = bounds.size
             settings = dimension_settings or default_settings_from_size(size.X, size.Y)
+            if dimension_settings is None and dimension_overrides:
+                settings = DimensionSettings.model_validate(
+                    {**settings.model_dump(), **dimension_overrides}
+                )
             horizontal_offset = None
             vertical_offset = None
+            padding = settings.text_gap + settings.text_height
             if frame_bounds:
                 frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
                 base_y = bounds.max.Y if horizontal_dir >= 0 else bounds.min.Y
                 base_x = bounds.max.X if vertical_dir >= 0 else bounds.min.X
-                padding = settings.text_gap + settings.text_height
                 horizontal_offset = _clamp_offset(
                     base_y,
                     horizontal_dir,
@@ -137,6 +180,132 @@ def _build_layers(
             )
             dims.extend(result.lines)
             dim_texts.extend(result.texts)
+
+            primitives = extract_primitives(shapes)
+            features = extract_feature_coordinates(primitives)
+            internal_dims = plan_internal_dimensions(
+                features,
+                horizontal_side="top" if horizontal_dir >= 0 else "bottom",
+                vertical_side="right" if vertical_dir >= 0 else "left",
+            )
+            hole_positions, hole_diameters, hole_pitches, pitch_axes = plan_hole_dimensions(
+                features,
+                horizontal_side="top" if horizontal_dir >= 0 else "bottom",
+                vertical_side="right" if vertical_dir >= 0 else "left",
+            )
+            pitch_line_dims: list[PlannedDimension] = []
+            for plan in hole_pitches:
+                label = f"{plan.count}x{settings.pitch_prefix}{format_length(plan.pitch, settings.decimal_places)}"
+                pitch_line_dims.append(
+                    PlannedDimension(
+                        p1=plan.p1,
+                        p2=plan.p2,
+                        orientation=plan.orientation,
+                        side=plan.side,
+                        label=label,
+                    )
+                )
+            rules = PlanningRules()
+            line_dims, hole_diameters = apply_planning_rules(
+                hole_positions,
+                pitch_line_dims,
+                internal_dims,
+                hole_diameters,
+                rules=rules,
+            )
+
+            if rules.collapse_diameter_with_pitch and (pitch_axes["horizontal"] or pitch_axes["vertical"]):
+                groups = group_circles_by_radius(features.circles)
+                collapsed: list = []
+                angle_candidates = [45, 135] if horizontal_dir >= 0 else [-45, -135]
+                for idx, group in enumerate(groups[: rules.max_diameter_groups]):
+                    if not group:
+                        continue
+                    circle = group[0]
+                    angle = angle_candidates[idx % len(angle_candidates)]
+                    label = (
+                        f"{len(group)}x{settings.diameter_symbol}"
+                        f"{format_length(circle.radius * 2, settings.decimal_places)}"
+                    )
+                    collapsed.append(
+                        PlannedDiameterDimension(
+                            center=circle.center,
+                            radius=circle.radius,
+                            leader_angle_deg=angle,
+                            label=label,
+                        )
+                    )
+                hole_diameters = collapsed
+
+            lane_step = settings.text_height + settings.text_gap + settings.arrow_size
+            lane_index = {"top": 0, "bottom": 0, "left": 0, "right": 0}
+            base_offset = settings.offset + lane_step
+            for plan in line_dims:
+                offset = base_offset + lane_index[plan.side] * lane_step
+                lane_index[plan.side] += 1
+                if frame_bounds:
+                    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
+                    if plan.orientation == "horizontal":
+                        base = max(plan.p1[1], plan.p2[1]) if plan.side == "top" else min(plan.p1[1], plan.p2[1])
+                        direction = 1 if plan.side == "top" else -1
+                        offset = abs(
+                            _clamp_offset(
+                                base,
+                                direction,
+                                frame_min_y,
+                                frame_max_y,
+                                offset,
+                                padding=padding,
+                            )
+                        )
+                    else:
+                        base = max(plan.p1[0], plan.p2[0]) if plan.side == "right" else min(plan.p1[0], plan.p2[0])
+                        direction = 1 if plan.side == "right" else -1
+                        offset = abs(
+                            _clamp_offset(
+                                base,
+                                direction,
+                                frame_min_x,
+                                frame_max_x,
+                                offset,
+                                padding=padding,
+                            )
+                        )
+                planned_result = generate_linear_dimension(
+                    plan.p1,
+                    plan.p2,
+                    orientation=plan.orientation,
+                    side=plan.side,
+                    offset=offset,
+                    settings=settings,
+                    label=plan.label,
+                )
+                dims.extend(planned_result.lines)
+                dim_texts.extend(planned_result.texts)
+
+            for plan in hole_diameters:
+                leader_length = settings.arrow_size * 4 + settings.text_gap * 2 + settings.text_height
+                if frame_bounds:
+                    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
+                    direction = (
+                        math.cos(math.radians(plan.leader_angle_deg)),
+                        math.sin(math.radians(plan.leader_angle_deg)),
+                    )
+                    arrow_tip = (
+                        plan.center[0] + plan.radius * direction[0],
+                        plan.center[1] + plan.radius * direction[1],
+                    )
+                    available = _max_length_to_frame(arrow_tip, direction, frame_bounds)
+                    leader_length = min(leader_length, max(0.0, available - padding))
+                planned_result = generate_diameter_dimension(
+                    plan.center,
+                    plan.radius,
+                    leader_angle_deg=plan.leader_angle_deg,
+                    settings=settings,
+                    leader_length=leader_length,
+                )
+                dims.extend(planned_result.lines)
+                dim_texts.extend(planned_result.texts)
         if dims:
             layers["dims"] = dims
     if add_template and template_spec:
@@ -190,7 +359,9 @@ def convert_2d_drawing(
     output_files: Iterable[str] | None = None,
 ) -> None:
     model = import_step(step_file)
-    line_types = load_style(style_name).resolve_line_types() if style_name else None
+    style = load_style(style_name) if style_name else None
+    line_types = style.resolve_line_types() if style else None
+    dimension_overrides = style.dimension if style and style.dimension else None
     template_spec = load_template(template_name)
     layers, text_annotations = _build_layers(
         model,
@@ -200,6 +371,7 @@ def convert_2d_drawing(
         y_offset,
         add_dimensions,
         dimension_settings,
+        dimension_overrides,
     )
     for target in _normalize_outputs(output_file, output_files):
         _export_layers(layers, target, line_weight, line_types=line_types, text_annotations=text_annotations)

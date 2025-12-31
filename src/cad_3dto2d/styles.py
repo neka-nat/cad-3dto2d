@@ -25,6 +25,7 @@ class StyleConfig(BaseModel):
     units: str = "mm"
     line_types: dict[str, str] = {}
     line_weight: float | None = None
+    dimension: dict[str, object] | None = None
 
     def resolve_line_types(self) -> dict[str, LineType]:
         resolved: dict[str, LineType] = {}

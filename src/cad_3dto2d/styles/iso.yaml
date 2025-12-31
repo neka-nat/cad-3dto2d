@@ -4,3 +4,6 @@ line_types:
   hidden: DASHED
   template: CONTINUOUS
   dims: CONTINUOUS
+dimension:
+  diameter_symbol: D
+  pitch_prefix: P
