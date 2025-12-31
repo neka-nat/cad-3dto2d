@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from build123d import Compound, Edge, Wire, Face
+from build123d import Compound
 from pydantic import BaseModel, ConfigDict
 
-Shape = Wire | Face | Edge
+from .types import Point3D, Shape
 
 
-def bounding_size(shapes: Iterable[Shape]) -> tuple[float, float, float]:
+def bounding_size(shapes: Iterable[Shape]) -> Point3D:
     shapes = list(shapes)
     if not shapes:
         return (0.0, 0.0, 0.0)
@@ -24,7 +24,7 @@ class ViewProjection(_ShapeModel):
     visible: list[Shape]
     hidden: list[Shape]
 
-    def bounding_size(self) -> tuple[float, float, float]:
+    def bounding_size(self) -> Point3D:
         return bounding_size(self.visible + self.hidden)
 
 
@@ -34,7 +34,7 @@ class ThreeViewProjections(_ShapeModel):
     side_y: ViewProjection
 
 
-def project_view(model, view_port_org: tuple[float, float, float]) -> ViewProjection:
+def project_view(model, view_port_org: Point3D) -> ViewProjection:
     visible, hidden = model.project_to_viewport(view_port_org)
     return ViewProjection(visible=list(visible), hidden=list(hidden))
 

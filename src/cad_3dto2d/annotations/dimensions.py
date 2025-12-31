@@ -6,7 +6,7 @@ from typing import Iterable, Literal
 from build123d import Compound, Line
 from pydantic import BaseModel, ConfigDict
 
-from ..views import Shape
+from ..types import Point2D, Point3D, Shape
 
 
 class DimensionSettings(BaseModel):
@@ -36,7 +36,7 @@ def _default_settings(size_x: float, size_y: float) -> DimensionSettings:
     )
 
 
-def _maybe_line(p1: tuple[float, float, float], p2: tuple[float, float, float]) -> Line | None:
+def _maybe_line(p1: Point3D, p2: Point3D) -> Line | None:
     dx = p1[0] - p2[0]
     dy = p1[1] - p2[1]
     dz = p1[2] - p2[2]
@@ -97,7 +97,7 @@ def _arrow_head_vertical(x: float, y: float, arrow_size: float, direction: float
 def _arrow_head_angle(
     x: float,
     y: float,
-    direction: tuple[float, float],
+    direction: Point2D,
     arrow_size: float,
 ) -> list[Line]:
     dx, dy = direction
@@ -117,7 +117,7 @@ def _arrow_head_angle(
 
 
 def generate_diameter_dimension(
-    center: tuple[float, float],
+    center: Point2D,
     radius: float,
     leader_angle_deg: float,
     settings: DimensionSettings | None = None,
@@ -157,8 +157,8 @@ def generate_diameter_dimension(
 
 
 def _horizontal_dimension_from_points(
-    p1: tuple[float, float],
-    p2: tuple[float, float],
+    p1: Point2D,
+    p2: Point2D,
     side: DimensionSide,
     offset: float,
     settings: DimensionSettings,
@@ -188,8 +188,8 @@ def _horizontal_dimension_from_points(
 
 
 def _vertical_dimension_from_points(
-    p1: tuple[float, float],
-    p2: tuple[float, float],
+    p1: Point2D,
+    p2: Point2D,
     side: DimensionSide,
     offset: float,
     settings: DimensionSettings,
@@ -219,8 +219,8 @@ def _vertical_dimension_from_points(
 
 
 def generate_linear_dimension(
-    p1: tuple[float, float],
-    p2: tuple[float, float],
+    p1: Point2D,
+    p2: Point2D,
     orientation: DimensionOrientation | None = None,
     side: DimensionSide | None = None,
     offset: float | None = None,

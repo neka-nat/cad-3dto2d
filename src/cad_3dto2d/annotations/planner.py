@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
+from ..types import Point2D
 from .dimensions import DimensionOrientation, DimensionSide
-from .features import FeatureCoordinates, CirclePrimitive
+from .features import CirclePrimitive, FeatureCoordinates
 
 
 class PlannedDimension(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    p1: tuple[float, float]
-    p2: tuple[float, float]
+    p1: Point2D
+    p2: Point2D
     orientation: DimensionOrientation
     side: DimensionSide
     label: str | None = None
@@ -19,7 +20,7 @@ class PlannedDimension(BaseModel):
 class PlannedDiameterDimension(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    center: tuple[float, float]
+    center: Point2D
     radius: float
     leader_angle_deg: float
     label: str | None = None
@@ -28,8 +29,8 @@ class PlannedDiameterDimension(BaseModel):
 class PlannedPitchDimension(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    p1: tuple[float, float]
-    p2: tuple[float, float]
+    p1: Point2D
+    p2: Point2D
     orientation: DimensionOrientation
     side: DimensionSide
     count: int

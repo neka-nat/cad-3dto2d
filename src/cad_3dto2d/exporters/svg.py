@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import os
 import xml.etree.ElementTree as ET
-from typing import Iterable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterable
 
-from build123d import ExportSVG, LineType, Unit, Wire, Face, Edge
+from build123d import ExportSVG, LineType, Unit
 from reportlab.graphics import renderPM
 from svglib.svglib import svg2rlg
+
+from ..types import Shape
 
 if TYPE_CHECKING:
     from ..annotations.dimensions import DimensionText
 
-Shape = Wire | Face | Edge
 _SVG_NS = "http://www.w3.org/2000/svg"
 ET.register_namespace("", _SVG_NS)
 

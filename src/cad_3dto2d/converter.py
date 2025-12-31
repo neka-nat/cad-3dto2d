@@ -1,13 +1,14 @@
-import os
 import math
-from typing import Iterable
+import os
+from typing import Iterable, Literal, NamedTuple
 
-from build123d import Compound, Edge, ShapeList, Wire, Face, import_step, import_svg
+from build123d import Compound, ShapeList, import_step, import_svg
+from pydantic import BaseModel, ConfigDict
 
-from .exporters.dxf import export_dxf_layers
-from .exporters.svg import export_svg_layers, inject_svg_text, rasterize_svg
 from .annotations.dimensions import (
+    DimensionResult,
     DimensionSettings,
+    DimensionSide,
     DimensionText,
     default_settings_from_size,
     format_length,
@@ -15,26 +16,52 @@ from .annotations.dimensions import (
     generate_diameter_dimension,
     generate_linear_dimension,
 )
-from .annotations.features import extract_feature_coordinates, extract_primitives
+from .annotations.features import FeatureCoordinates, extract_feature_coordinates, extract_primitives
 from .annotations.planner import (
-    PlannedDimension,
     PlannedDiameterDimension,
+    PlannedDimension,
     PlanningRules,
     apply_planning_rules,
     group_circles_by_radius,
     plan_hole_dimensions,
     plan_internal_dimensions,
 )
-from .layout import layout_three_views
+from .exporters.dxf import export_dxf_layers
+from .exporters.svg import export_svg_layers, inject_svg_text, rasterize_svg
+from .layout import LayeredShapes, layout_three_views
 from .styles import load_style
 from .templates import TemplateSpec, load_template
+from .types import BoundingBox2D, Point2D, Shape
 from .views import project_three_views
 
-Shape = Wire | Face | Edge
 RASTER_IMAGE_TYPES = {"png", "jpg", "jpeg"}
 
 
-def _load_template(template_spec: TemplateSpec) -> ShapeList[Wire | Face]:
+class ViewDimensionConfig(BaseModel):
+    """Configuration for dimension generation on a single view."""
+
+    model_config = ConfigDict(frozen=True)
+
+    horizontal_dir: Literal[1, -1]
+    vertical_dir: Literal[1, -1]
+
+    @property
+    def horizontal_side(self) -> DimensionSide:
+        return "top" if self.horizontal_dir >= 0 else "bottom"
+
+    @property
+    def vertical_side(self) -> DimensionSide:
+        return "right" if self.vertical_dir >= 0 else "left"
+
+
+class DimensionOutput(NamedTuple):
+    """Output from dimension generation."""
+
+    lines: list[Shape]
+    texts: list[DimensionText]
+
+
+def _load_template(template_spec: TemplateSpec) -> ShapeList[Shape]:
     return import_svg(template_spec.file_path)
 
 
@@ -52,7 +79,7 @@ def _normalize_outputs(output_file: str, output_files: Iterable[str] | None) -> 
     return unique
 
 
-def _centered_frame_bounds(template_spec: TemplateSpec | None) -> tuple[float, float, float, float] | None:
+def _centered_frame_bounds(template_spec: TemplateSpec | None) -> BoundingBox2D | None:
     if not template_spec or not template_spec.frame_bbox_mm:
         return None
     min_x, min_y, max_x, max_y = template_spec.frame_bbox_mm
@@ -83,9 +110,9 @@ def _clamp_offset(
 
 
 def _max_length_to_frame(
-    point: tuple[float, float],
-    direction: tuple[float, float],
-    frame_bounds: tuple[float, float, float, float],
+    point: Point2D,
+    direction: Point2D,
+    frame_bounds: BoundingBox2D,
 ) -> float:
     x0, y0 = point
     dx, dy = direction
@@ -106,6 +133,243 @@ def _max_length_to_frame(
     return max(0.0, min(candidates))
 
 
+def _resolve_dimension_settings(
+    shapes: list[Shape],
+    dimension_settings: DimensionSettings | None,
+    dimension_overrides: dict[str, object] | None,
+) -> DimensionSettings:
+    """Resolve dimension settings from shapes size, user settings, and overrides."""
+    bounds = Compound(children=shapes).bounding_box()
+    size = bounds.size
+    settings = dimension_settings or default_settings_from_size(size.X, size.Y)
+    if dimension_settings is None and dimension_overrides:
+        settings = DimensionSettings.model_validate(
+            {**settings.model_dump(), **dimension_overrides}
+        )
+    return settings
+
+
+def _generate_basic_view_dimensions(
+    shapes: list[Shape],
+    settings: DimensionSettings,
+    config: ViewDimensionConfig,
+    frame_bounds: BoundingBox2D | None,
+) -> DimensionResult:
+    """Generate basic bounding box dimensions for a view."""
+    bounds = Compound(children=shapes).bounding_box()
+    padding = settings.text_gap + settings.text_height
+
+    horizontal_offset = None
+    vertical_offset = None
+
+    if frame_bounds:
+        frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
+        base_y = bounds.max.Y if config.horizontal_dir >= 0 else bounds.min.Y
+        base_x = bounds.max.X if config.vertical_dir >= 0 else bounds.min.X
+        horizontal_offset = _clamp_offset(
+            base_y, config.horizontal_dir, frame_min_y, frame_max_y,
+            settings.offset, padding=padding,
+        )
+        vertical_offset = _clamp_offset(
+            base_x, config.vertical_dir, frame_min_x, frame_max_x,
+            settings.offset, padding=padding,
+        )
+
+    return generate_basic_dimensions(
+        shapes,
+        settings=settings,
+        horizontal_dir=config.horizontal_dir,
+        vertical_dir=config.vertical_dir,
+        horizontal_offset=horizontal_offset,
+        vertical_offset=vertical_offset,
+    )
+
+
+def _plan_feature_dimensions(
+    features: FeatureCoordinates,
+    config: ViewDimensionConfig,
+    settings: DimensionSettings,
+    rules: PlanningRules,
+) -> tuple[list[PlannedDimension], list[PlannedDiameterDimension], dict[str, bool]]:
+    """Plan dimensions for internal features and holes."""
+    internal_dims = plan_internal_dimensions(
+        features,
+        horizontal_side=config.horizontal_side,
+        vertical_side=config.vertical_side,
+    )
+    hole_positions, hole_diameters, hole_pitches, pitch_axes = plan_hole_dimensions(
+        features,
+        horizontal_side=config.horizontal_side,
+        vertical_side=config.vertical_side,
+    )
+
+    # Convert pitch dimensions to labeled line dimensions
+    pitch_line_dims: list[PlannedDimension] = []
+    for plan in hole_pitches:
+        label = f"{plan.count}x{settings.pitch_prefix}{format_length(plan.pitch, settings.decimal_places)}"
+        pitch_line_dims.append(
+            PlannedDimension(
+                p1=plan.p1,
+                p2=plan.p2,
+                orientation=plan.orientation,
+                side=plan.side,
+                label=label,
+            )
+        )
+
+    line_dims, diameter_dims = apply_planning_rules(
+        hole_positions, pitch_line_dims, internal_dims, hole_diameters, rules=rules,
+    )
+
+    # Collapse diameter dimensions when pitch patterns exist
+    if rules.collapse_diameter_with_pitch and (pitch_axes["horizontal"] or pitch_axes["vertical"]):
+        groups = group_circles_by_radius(features.circles)
+        collapsed: list[PlannedDiameterDimension] = []
+        angle_candidates = [45, 135] if config.horizontal_dir >= 0 else [-45, -135]
+        for idx, group in enumerate(groups[: rules.max_diameter_groups]):
+            if not group:
+                continue
+            circle = group[0]
+            angle = angle_candidates[idx % len(angle_candidates)]
+            label = (
+                f"{len(group)}x{settings.diameter_symbol}"
+                f"{format_length(circle.radius * 2, settings.decimal_places)}"
+            )
+            collapsed.append(
+                PlannedDiameterDimension(
+                    center=circle.center,
+                    radius=circle.radius,
+                    leader_angle_deg=angle,
+                    label=label,
+                )
+            )
+        diameter_dims = collapsed
+
+    return line_dims, diameter_dims, pitch_axes
+
+
+def _generate_line_dimensions(
+    line_dims: list[PlannedDimension],
+    settings: DimensionSettings,
+    frame_bounds: BoundingBox2D | None,
+) -> DimensionOutput:
+    """Generate dimension lines from planned dimensions with frame clamping."""
+    lines: list[Shape] = []
+    texts: list[DimensionText] = []
+    padding = settings.text_gap + settings.text_height
+    lane_step = settings.text_height + settings.text_gap + settings.arrow_size
+    lane_index = {"top": 0, "bottom": 0, "left": 0, "right": 0}
+    base_offset = settings.offset + lane_step
+
+    for plan in line_dims:
+        offset = base_offset + lane_index[plan.side] * lane_step
+        lane_index[plan.side] += 1
+
+        if frame_bounds:
+            frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
+            if plan.orientation == "horizontal":
+                base = max(plan.p1[1], plan.p2[1]) if plan.side == "top" else min(plan.p1[1], plan.p2[1])
+                direction = 1 if plan.side == "top" else -1
+                offset = abs(_clamp_offset(base, direction, frame_min_y, frame_max_y, offset, padding=padding))
+            else:
+                base = max(plan.p1[0], plan.p2[0]) if plan.side == "right" else min(plan.p1[0], plan.p2[0])
+                direction = 1 if plan.side == "right" else -1
+                offset = abs(_clamp_offset(base, direction, frame_min_x, frame_max_x, offset, padding=padding))
+
+        result = generate_linear_dimension(
+            plan.p1, plan.p2,
+            orientation=plan.orientation,
+            side=plan.side,
+            offset=offset,
+            settings=settings,
+            label=plan.label,
+        )
+        lines.extend(result.lines)
+        texts.extend(result.texts)
+
+    return DimensionOutput(lines, texts)
+
+
+def _generate_diameter_dimensions(
+    diameter_dims: list[PlannedDiameterDimension],
+    settings: DimensionSettings,
+    frame_bounds: BoundingBox2D | None,
+) -> DimensionOutput:
+    """Generate diameter dimensions with leader lines and frame clamping."""
+    lines: list[Shape] = []
+    texts: list[DimensionText] = []
+    padding = settings.text_gap + settings.text_height
+
+    for plan in diameter_dims:
+        leader_length = settings.arrow_size * 4 + settings.text_gap * 2 + settings.text_height
+
+        if frame_bounds:
+            direction = (
+                math.cos(math.radians(plan.leader_angle_deg)),
+                math.sin(math.radians(plan.leader_angle_deg)),
+            )
+            arrow_tip = (
+                plan.center[0] + plan.radius * direction[0],
+                plan.center[1] + plan.radius * direction[1],
+            )
+            available = _max_length_to_frame(arrow_tip, direction, frame_bounds)
+            leader_length = min(leader_length, max(0.0, available - padding))
+
+        result = generate_diameter_dimension(
+            plan.center,
+            plan.radius,
+            leader_angle_deg=plan.leader_angle_deg,
+            settings=settings,
+            leader_length=leader_length,
+        )
+        lines.extend(result.lines)
+        texts.extend(result.texts)
+
+    return DimensionOutput(lines, texts)
+
+
+def _generate_view_dimensions(
+    view: LayeredShapes,
+    config: ViewDimensionConfig,
+    dimension_settings: DimensionSettings | None,
+    dimension_overrides: dict[str, object] | None,
+    frame_bounds: BoundingBox2D | None,
+) -> DimensionOutput:
+    """Generate all dimensions for a single view."""
+    shapes = view.visible + view.hidden
+    if not shapes:
+        return DimensionOutput([], [])
+
+    settings = _resolve_dimension_settings(shapes, dimension_settings, dimension_overrides)
+    rules = PlanningRules()
+
+    # Generate basic bounding box dimensions
+    basic_result = _generate_basic_view_dimensions(shapes, settings, config, frame_bounds)
+
+    # Extract and plan feature dimensions
+    primitives = extract_primitives(shapes)
+    features = extract_feature_coordinates(primitives)
+    line_dims, diameter_dims, _ = _plan_feature_dimensions(features, config, settings, rules)
+
+    # Generate planned dimensions
+    line_output = _generate_line_dimensions(line_dims, settings, frame_bounds)
+    diameter_output = _generate_diameter_dimensions(diameter_dims, settings, frame_bounds)
+
+    # Combine all outputs
+    all_lines = list(basic_result.lines) + line_output.lines + diameter_output.lines
+    all_texts = list(basic_result.texts) + line_output.texts + diameter_output.texts
+
+    return DimensionOutput(all_lines, all_texts)
+
+
+# View configurations for three-view drawing
+VIEW_CONFIGS = [
+    ViewDimensionConfig(horizontal_dir=1, vertical_dir=1),   # front
+    ViewDimensionConfig(horizontal_dir=1, vertical_dir=1),   # side_x
+    ViewDimensionConfig(horizontal_dir=-1, vertical_dir=1),  # side_y
+]
+
+
 def _build_layers(
     model,
     add_template: bool,
@@ -118,6 +382,8 @@ def _build_layers(
 ) -> tuple[dict[str, list[Shape]], list[DimensionText]]:
     layers: dict[str, list[Shape]] = {}
     dim_texts: list[DimensionText] = []
+
+    # Project and layout the three views
     views = project_three_views(model)
     layout = layout_three_views(
         views.front,
@@ -129,192 +395,32 @@ def _build_layers(
     )
     layers["visible"] = layout.combined.visible
     layers["hidden"] = layout.combined.hidden
+
+    # Generate dimensions for each view
     if add_dimensions:
         frame_bounds = _centered_frame_bounds(template_spec)
         dims: list[Shape] = []
-        for view, horizontal_dir, vertical_dir in (
-            (layout.front, 1, 1),
-            (layout.side_x, 1, 1),
-            (layout.side_y, -1, 1),
-        ):
-            shapes = view.visible + view.hidden
-            if not shapes:
-                continue
-            bounds = Compound(children=shapes).bounding_box()
-            size = bounds.size
-            settings = dimension_settings or default_settings_from_size(size.X, size.Y)
-            if dimension_settings is None and dimension_overrides:
-                settings = DimensionSettings.model_validate(
-                    {**settings.model_dump(), **dimension_overrides}
-                )
-            horizontal_offset = None
-            vertical_offset = None
-            padding = settings.text_gap + settings.text_height
-            if frame_bounds:
-                frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
-                base_y = bounds.max.Y if horizontal_dir >= 0 else bounds.min.Y
-                base_x = bounds.max.X if vertical_dir >= 0 else bounds.min.X
-                horizontal_offset = _clamp_offset(
-                    base_y,
-                    horizontal_dir,
-                    frame_min_y,
-                    frame_max_y,
-                    settings.offset,
-                    padding=padding,
-                )
-                vertical_offset = _clamp_offset(
-                    base_x,
-                    vertical_dir,
-                    frame_min_x,
-                    frame_max_x,
-                    settings.offset,
-                    padding=padding,
-                )
-            result = generate_basic_dimensions(
-                shapes,
-                settings=settings,
-                horizontal_dir=horizontal_dir,
-                vertical_dir=vertical_dir,
-                horizontal_offset=horizontal_offset,
-                vertical_offset=vertical_offset,
-            )
-            dims.extend(result.lines)
-            dim_texts.extend(result.texts)
 
-            primitives = extract_primitives(shapes)
-            features = extract_feature_coordinates(primitives)
-            internal_dims = plan_internal_dimensions(
-                features,
-                horizontal_side="top" if horizontal_dir >= 0 else "bottom",
-                vertical_side="right" if vertical_dir >= 0 else "left",
+        layout_views = [layout.front, layout.side_x, layout.side_y]
+        for view, config in zip(layout_views, VIEW_CONFIGS):
+            output = _generate_view_dimensions(
+                view, config, dimension_settings, dimension_overrides, frame_bounds,
             )
-            hole_positions, hole_diameters, hole_pitches, pitch_axes = plan_hole_dimensions(
-                features,
-                horizontal_side="top" if horizontal_dir >= 0 else "bottom",
-                vertical_side="right" if vertical_dir >= 0 else "left",
-            )
-            pitch_line_dims: list[PlannedDimension] = []
-            for plan in hole_pitches:
-                label = f"{plan.count}x{settings.pitch_prefix}{format_length(plan.pitch, settings.decimal_places)}"
-                pitch_line_dims.append(
-                    PlannedDimension(
-                        p1=plan.p1,
-                        p2=plan.p2,
-                        orientation=plan.orientation,
-                        side=plan.side,
-                        label=label,
-                    )
-                )
-            rules = PlanningRules()
-            line_dims, hole_diameters = apply_planning_rules(
-                hole_positions,
-                pitch_line_dims,
-                internal_dims,
-                hole_diameters,
-                rules=rules,
-            )
+            dims.extend(output.lines)
+            dim_texts.extend(output.texts)
 
-            if rules.collapse_diameter_with_pitch and (pitch_axes["horizontal"] or pitch_axes["vertical"]):
-                groups = group_circles_by_radius(features.circles)
-                collapsed: list = []
-                angle_candidates = [45, 135] if horizontal_dir >= 0 else [-45, -135]
-                for idx, group in enumerate(groups[: rules.max_diameter_groups]):
-                    if not group:
-                        continue
-                    circle = group[0]
-                    angle = angle_candidates[idx % len(angle_candidates)]
-                    label = (
-                        f"{len(group)}x{settings.diameter_symbol}"
-                        f"{format_length(circle.radius * 2, settings.decimal_places)}"
-                    )
-                    collapsed.append(
-                        PlannedDiameterDimension(
-                            center=circle.center,
-                            radius=circle.radius,
-                            leader_angle_deg=angle,
-                            label=label,
-                        )
-                    )
-                hole_diameters = collapsed
-
-            lane_step = settings.text_height + settings.text_gap + settings.arrow_size
-            lane_index = {"top": 0, "bottom": 0, "left": 0, "right": 0}
-            base_offset = settings.offset + lane_step
-            for plan in line_dims:
-                offset = base_offset + lane_index[plan.side] * lane_step
-                lane_index[plan.side] += 1
-                if frame_bounds:
-                    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
-                    if plan.orientation == "horizontal":
-                        base = max(plan.p1[1], plan.p2[1]) if plan.side == "top" else min(plan.p1[1], plan.p2[1])
-                        direction = 1 if plan.side == "top" else -1
-                        offset = abs(
-                            _clamp_offset(
-                                base,
-                                direction,
-                                frame_min_y,
-                                frame_max_y,
-                                offset,
-                                padding=padding,
-                            )
-                        )
-                    else:
-                        base = max(plan.p1[0], plan.p2[0]) if plan.side == "right" else min(plan.p1[0], plan.p2[0])
-                        direction = 1 if plan.side == "right" else -1
-                        offset = abs(
-                            _clamp_offset(
-                                base,
-                                direction,
-                                frame_min_x,
-                                frame_max_x,
-                                offset,
-                                padding=padding,
-                            )
-                        )
-                planned_result = generate_linear_dimension(
-                    plan.p1,
-                    plan.p2,
-                    orientation=plan.orientation,
-                    side=plan.side,
-                    offset=offset,
-                    settings=settings,
-                    label=plan.label,
-                )
-                dims.extend(planned_result.lines)
-                dim_texts.extend(planned_result.texts)
-
-            for plan in hole_diameters:
-                leader_length = settings.arrow_size * 4 + settings.text_gap * 2 + settings.text_height
-                if frame_bounds:
-                    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bounds
-                    direction = (
-                        math.cos(math.radians(plan.leader_angle_deg)),
-                        math.sin(math.radians(plan.leader_angle_deg)),
-                    )
-                    arrow_tip = (
-                        plan.center[0] + plan.radius * direction[0],
-                        plan.center[1] + plan.radius * direction[1],
-                    )
-                    available = _max_length_to_frame(arrow_tip, direction, frame_bounds)
-                    leader_length = min(leader_length, max(0.0, available - padding))
-                planned_result = generate_diameter_dimension(
-                    plan.center,
-                    plan.radius,
-                    leader_angle_deg=plan.leader_angle_deg,
-                    settings=settings,
-                    leader_length=leader_length,
-                )
-                dims.extend(planned_result.lines)
-                dim_texts.extend(planned_result.texts)
         if dims:
             layers["dims"] = dims
+
+    # Add template layer
     if add_template and template_spec:
         template = _load_template(template_spec)
         tmp_size = Compound(children=template).bounding_box().size
-        template = [
-            shape.translate((-tmp_size.X / 2 + x_offset, -tmp_size.Y / 2 + y_offset, 0)) for shape in template
+        layers["template"] = [
+            shape.translate((-tmp_size.X / 2 + x_offset, -tmp_size.Y / 2 + y_offset, 0))
+            for shape in template
         ]
-        layers["template"] = template
+
     return layers, dim_texts
 
 

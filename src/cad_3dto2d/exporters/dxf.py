@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from build123d import ExportDXF, LineType, Unit, Wire, Face, Edge
+from build123d import ExportDXF, LineType, Unit
 
-Shape = Wire | Face | Edge
+from ..types import Shape
 
 _LINE_TYPES: dict[str, LineType] = {
     "visible": LineType.CONTINUOUS,

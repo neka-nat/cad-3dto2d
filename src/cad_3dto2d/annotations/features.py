@@ -5,21 +5,21 @@ from typing import Iterable, Literal
 from build123d import Compound, Edge, GeomType
 from pydantic import BaseModel, ConfigDict
 
-from ..views import Shape
+from ..types import BoundingBox2D, Point2D, Shape
 
 
 class LinePrimitive(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    p1: tuple[float, float]
-    p2: tuple[float, float]
+    p1: Point2D
+    p2: Point2D
     orientation: Literal["horizontal", "vertical", "other"]
 
 
 class CirclePrimitive(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    center: tuple[float, float]
+    center: Point2D
     radius: float
 
 
@@ -28,7 +28,7 @@ class PrimitiveResult(BaseModel):
 
     lines: list[LinePrimitive]
     circles: list[CirclePrimitive]
-    bounds: tuple[float, float, float, float]
+    bounds: BoundingBox2D
 
 
 class FeatureCoordinates(BaseModel):
@@ -37,7 +37,7 @@ class FeatureCoordinates(BaseModel):
     x_coords: list[float]
     y_coords: list[float]
     circles: list[CirclePrimitive]
-    bounds: tuple[float, float, float, float]
+    bounds: BoundingBox2D
 
 
 def _iter_edges(shapes: Iterable[Shape]) -> Iterable[Edge]:

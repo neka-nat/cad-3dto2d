@@ -5,7 +5,8 @@ from typing import Iterable
 from build123d import Axis, Compound
 from pydantic import BaseModel, ConfigDict
 
-from .views import ViewProjection, Shape, bounding_size
+from .types import BoundingBox2D, Point2D, Point3D, Shape
+from .views import ViewProjection, bounding_size
 
 
 class LayeredShapes(BaseModel):
@@ -28,7 +29,7 @@ def _transform(
     shapes: Iterable[Shape],
     rotate_deg: float = 0.0,
     scale: float = 1.0,
-    translate: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    translate: Point3D = (0.0, 0.0, 0.0),
 ) -> list[Shape]:
     translated = []
     for shape in shapes:
@@ -46,7 +47,7 @@ def _transform_layered(
     layered: LayeredShapes,
     rotate_deg: float = 0.0,
     scale: float = 1.0,
-    translate: tuple[float, float, float] = (0.0, 0.0, 0.0),
+    translate: Point3D = (0.0, 0.0, 0.0),
 ) -> LayeredShapes:
     return LayeredShapes(
         visible=_transform(layered.visible, rotate_deg=rotate_deg, scale=scale, translate=translate),
@@ -70,8 +71,8 @@ def _combine_views(front: LayeredShapes, side_x: LayeredShapes, side_y: LayeredS
 
 def fit_layered_to_frame(
     layered: LayeredShapes,
-    frame_bbox_mm: tuple[float, float, float, float],
-    paper_size_mm: tuple[float, float] | None,
+    frame_bbox_mm: BoundingBox2D,
+    paper_size_mm: Point2D | None,
     frame_margin_ratio: float = 1.0,
     scale: float | None = None,
 ) -> LayeredShapes:
@@ -116,8 +117,8 @@ def fit_layered_to_frame(
 
 def fit_three_view_layout(
     layout: ThreeViewLayout,
-    frame_bbox_mm: tuple[float, float, float, float],
-    paper_size_mm: tuple[float, float] | None,
+    frame_bbox_mm: BoundingBox2D,
+    paper_size_mm: Point2D | None,
     frame_margin_ratio: float = 1.0,
     scale: float | None = None,
 ) -> ThreeViewLayout:
@@ -173,8 +174,8 @@ def layout_three_views(
     side_x: ViewProjection,
     side_y: ViewProjection,
     margin_ratio: float = 1.1,
-    frame_bbox_mm: tuple[float, float, float, float] | None = None,
-    paper_size_mm: tuple[float, float] | None = None,
+    frame_bbox_mm: BoundingBox2D | None = None,
+    paper_size_mm: Point2D | None = None,
     frame_margin_ratio: float = 1.0,
     scale: float | None = None,
 ) -> ThreeViewLayout:

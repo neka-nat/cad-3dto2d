@@ -7,6 +7,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from .types import BoundingBox2D, Point2D
+
 
 class TemplateSpec(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -14,8 +16,8 @@ class TemplateSpec(BaseModel):
     name: str
     file: str
     file_path: str
-    paper_size_mm: tuple[float, float] | None = None
-    frame_bbox_mm: tuple[float, float, float, float] | None = None
+    paper_size_mm: Point2D | None = None
+    frame_bbox_mm: BoundingBox2D | None = None
     default_scale: float = 1.0
 
 
