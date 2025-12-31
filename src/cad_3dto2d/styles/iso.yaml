@@ -1,0 +1,6 @@
+units: mm
+line_types:
+  visible: CONTINUOUS
+  hidden: DASHED
+  template: CONTINUOUS
+  dims: CONTINUOUS

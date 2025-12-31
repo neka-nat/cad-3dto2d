@@ -10,6 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
     "build123d==0.8.0",
     "cadquery-ocp>=7.7.0a0,<7.8",
+    "pydantic>=2.12.5",
+    "pyyaml>=6.0",
     "rlpycairo>=0.3.0",
     "svglib>=1.5.1",
 ]
