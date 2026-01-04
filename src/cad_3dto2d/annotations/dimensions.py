@@ -12,7 +12,12 @@ class DimensionSettings(BaseModel):
 
     offset: float
     extension_gap: float
+    extension_offset: float | None = None
+    extension_extension: float | None = None
     arrow_size: float
+    arrow_block: str | None = None
+    arrow_block1: str | None = None
+    arrow_block2: str | None = None
     text_height: float = 3.5
     text_gap: float = 1.0
     decimal_places: int = 1

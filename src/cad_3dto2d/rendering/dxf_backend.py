@@ -36,15 +36,22 @@ def export_dxf_layers(
     exporter.write(output_file)
 
 
-def _dimension_overrides(settings: DimensionSettings) -> dict[str, float | int]:
-    return {
+def _dimension_overrides(settings: DimensionSettings) -> dict[str, float | int | str]:
+    override: dict[str, float | int | str] = {
         "dimtxt": settings.text_height,
         "dimasz": settings.arrow_size,
-        "dimexo": settings.extension_gap,
-        "dimexe": settings.extension_gap,
+        "dimexo": settings.extension_offset if settings.extension_offset is not None else settings.extension_gap,
+        "dimexe": settings.extension_extension if settings.extension_extension is not None else settings.extension_gap,
         "dimgap": settings.text_gap,
         "dimdec": settings.decimal_places,
     }
+    if settings.arrow_block:
+        override["dimblk"] = settings.arrow_block
+    if settings.arrow_block1:
+        override["dimblk1"] = settings.arrow_block1
+    if settings.arrow_block2:
+        override["dimblk2"] = settings.arrow_block2
+    return override
 
 
 def _set_dimension_text(dim_entity, text: str) -> None:
