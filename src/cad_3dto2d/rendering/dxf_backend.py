@@ -7,12 +7,14 @@ from ezdxf.addons.drawing.config import BackgroundPolicy, Configuration
 from ezdxf.addons.drawing.svg import SVGBackend
 
 from ..annotations.dimensions import DiameterDimensionSpec, DimensionSettings, LinearDimensionSpec
-from ..types import Shape
+from ..templates import ParametricTemplateSpec, TemplateSpec
+from ..types import BoundingBox2D, Shape
 
 _LINE_TYPES: dict[str, LineType] = {
     "visible": LineType.CONTINUOUS,
     "hidden": LineType.DASHED,
     "template": LineType.CONTINUOUS,
+    "title": LineType.CONTINUOUS,
 }
 
 
@@ -36,6 +38,16 @@ def export_dxf_layers(
     exporter.write(output_file)
 
 
+def apply_template_to_doc(
+    doc: "ezdxf.document.Drawing",
+    template_spec: TemplateSpec,
+    x_offset: float = 0.0,
+    y_offset: float = 0.0,
+) -> None:
+    if isinstance(template_spec, ParametricTemplateSpec):
+        _apply_parametric_template(doc, template_spec, x_offset=x_offset, y_offset=y_offset)
+
+
 def _dimension_overrides(settings: DimensionSettings) -> dict[str, float | int | str]:
     override: dict[str, float | int | str] = {
         "dimtxt": settings.text_height,
@@ -52,6 +64,59 @@ def _dimension_overrides(settings: DimensionSettings) -> dict[str, float | int |
     if settings.arrow_block2:
         override["dimblk2"] = settings.arrow_block2
     return override
+
+
+def _apply_parametric_template(
+    doc: "ezdxf.document.Drawing",
+    template_spec: ParametricTemplateSpec,
+    x_offset: float,
+    y_offset: float,
+) -> None:
+    msp = doc.modelspace()
+    _ensure_layer(doc, "template")
+    _ensure_layer(doc, "title")
+    frame_bbox = _centered_bbox(template_spec.frame_bbox_mm, template_spec.paper_size_mm)
+    if frame_bbox:
+        frame_bbox = _offset_bbox(frame_bbox, x_offset, y_offset)
+        _add_bbox_rect(msp, frame_bbox, layer="template")
+    if template_spec.title_block_bbox_mm:
+        title_bbox = _centered_bbox(template_spec.title_block_bbox_mm, template_spec.paper_size_mm)
+        if title_bbox:
+            title_bbox = _offset_bbox(title_bbox, x_offset, y_offset)
+            _add_bbox_rect(msp, title_bbox, layer="title")
+
+
+def _centered_bbox(bbox: BoundingBox2D, paper_size_mm: tuple[float, float] | None) -> BoundingBox2D:
+    min_x, min_y, max_x, max_y = bbox
+    if not paper_size_mm:
+        return bbox
+    paper_w, paper_h = paper_size_mm
+    return (
+        min_x - paper_w / 2,
+        min_y - paper_h / 2,
+        max_x - paper_w / 2,
+        max_y - paper_h / 2,
+    )
+
+
+def _offset_bbox(bbox: BoundingBox2D, x_offset: float, y_offset: float) -> BoundingBox2D:
+    return (bbox[0] + x_offset, bbox[1] + y_offset, bbox[2] + x_offset, bbox[3] + y_offset)
+
+
+def _add_bbox_rect(msp, bbox: BoundingBox2D, layer: str) -> None:
+    min_x, min_y, max_x, max_y = bbox
+    points = [
+        (min_x, min_y),
+        (max_x, min_y),
+        (max_x, max_y),
+        (min_x, max_y),
+    ]
+    msp.add_lwpolyline(points, close=True, dxfattribs={"layer": layer})
+
+
+def _ensure_layer(doc: "ezdxf.document.Drawing", name: str) -> None:
+    if not doc.layers.has_entry(name):
+        doc.layers.new(name, dxfattribs={"linetype": "CONTINUOUS"})
 
 
 def _set_dimension_text(dim_entity, text: str) -> None:
@@ -102,7 +167,7 @@ def add_ezdxf_dimensions(
 def render_dxf_to_svg(
     doc: "ezdxf.document.Drawing",
     page_size_mm: tuple[float, float],
-    margin_mm: float = 0.0,
+    margin_mm: float = 1.0,
 ) -> str:
     ctx = RenderContext(doc)
     backend = SVGBackend()

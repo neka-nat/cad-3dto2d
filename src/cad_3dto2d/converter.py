@@ -26,11 +26,16 @@ from .annotations.planner import (
     plan_hole_dimensions,
     plan_internal_dimensions,
 )
-from .rendering.dxf_backend import add_ezdxf_dimensions, export_dxf_layers, render_dxf_to_svg
+from .rendering.dxf_backend import (
+    add_ezdxf_dimensions,
+    apply_template_to_doc,
+    export_dxf_layers,
+    render_dxf_to_svg,
+)
 from .rendering.svg_tools import rasterize_svg
 from .layout import LayeredShapes, layout_three_views
 from .styles import load_style
-from .templates import TemplateSpec, load_template
+from .templates import SvgTemplateSpec, TemplateSpec, load_template
 from .types import BoundingBox2D, Point2D, Shape
 from .views import project_three_views
 
@@ -62,14 +67,14 @@ class DimensionPlanOutput(NamedTuple):
     diameter: list[DiameterDimensionSpec]
 
 
-def _load_template(template_spec: TemplateSpec) -> ShapeList[Shape]:
+def _load_svg_template(template_spec: SvgTemplateSpec) -> ShapeList[Shape]:
     return import_svg(template_spec.file_path)
 
 
-def _centered_frame_bounds(template_spec: TemplateSpec | None) -> BoundingBox2D | None:
-    if not template_spec or not template_spec.frame_bbox_mm:
+def _centered_bbox(template_spec: TemplateSpec | None, bbox: BoundingBox2D | None) -> BoundingBox2D | None:
+    if not template_spec or not bbox:
         return None
-    min_x, min_y, max_x, max_y = template_spec.frame_bbox_mm
+    min_x, min_y, max_x, max_y = bbox
     if template_spec.paper_size_mm:
         paper_w, paper_h = template_spec.paper_size_mm
         return (
@@ -79,21 +84,29 @@ def _centered_frame_bounds(template_spec: TemplateSpec | None) -> BoundingBox2D 
             max_y - paper_h / 2,
         )
     return (min_x, min_y, max_x, max_y)
+
+
+def _centered_frame_bounds(template_spec: TemplateSpec | None) -> BoundingBox2D | None:
+    if not template_spec:
+        return None
+    return _centered_bbox(template_spec, template_spec.frame_bbox_mm)
 
 
 def _centered_title_block_bounds(template_spec: TemplateSpec | None) -> BoundingBox2D | None:
-    if not template_spec or not template_spec.title_block_bbox_mm:
+    if not template_spec:
         return None
-    min_x, min_y, max_x, max_y = template_spec.title_block_bbox_mm
-    if template_spec.paper_size_mm:
-        paper_w, paper_h = template_spec.paper_size_mm
-        return (
-            min_x - paper_w / 2,
-            min_y - paper_h / 2,
-            max_x - paper_w / 2,
-            max_y - paper_h / 2,
-        )
-    return (min_x, min_y, max_x, max_y)
+    return _centered_bbox(template_spec, template_spec.title_block_bbox_mm)
+
+
+def _centered_reserved_bounds(template_spec: TemplateSpec | None) -> list[BoundingBox2D]:
+    if not template_spec or not template_spec.reserved_bbox_mm:
+        return []
+    centered: list[BoundingBox2D] = []
+    for bbox in template_spec.reserved_bbox_mm:
+        centered_bbox = _centered_bbox(template_spec, bbox)
+        if centered_bbox:
+            centered.append(centered_bbox)
+    return centered
 
 
 def _clamp_offset(
@@ -610,7 +623,11 @@ def _build_layers(
     if add_dimensions:
         frame_bounds = _centered_frame_bounds(template_spec)
         title_block_bounds = _centered_title_block_bounds(template_spec)
-        avoid_bounds = [title_block_bounds] if title_block_bounds else None
+        avoid_bounds = _centered_reserved_bounds(template_spec)
+        if title_block_bounds:
+            avoid_bounds.append(title_block_bounds)
+        if not avoid_bounds:
+            avoid_bounds = None
 
         layout_views = [layout.front, layout.side_x, layout.side_y]
         for view, config in zip(layout_views, VIEW_CONFIGS):
@@ -621,8 +638,8 @@ def _build_layers(
             diameter_dims.extend(output.diameter)
 
     # Add template layer
-    if add_template and template_spec:
-        template = _load_template(template_spec)
+    if add_template and isinstance(template_spec, SvgTemplateSpec):
+        template = _load_svg_template(template_spec)
         tmp_size = Compound(children=template).bounding_box().size
         layers["template"] = [
             shape.translate((-tmp_size.X / 2 + x_offset, -tmp_size.Y / 2 + y_offset, 0))
@@ -659,6 +676,8 @@ def _export_outputs(
     line_types: dict[str, "LineType"] | None,
     template_spec: TemplateSpec | None,
     add_template: bool,
+    x_offset: float,
+    y_offset: float,
 ) -> None:
     with tempfile.NamedTemporaryFile(dir=os.getcwd(), suffix=".dxf", delete=False) as tmp_dxf:
         base_dxf = tmp_dxf.name
@@ -668,6 +687,9 @@ def _export_outputs(
     finally:
         if os.path.exists(base_dxf):
             os.remove(base_dxf)
+
+    if add_template and template_spec:
+        apply_template_to_doc(doc, template_spec, x_offset=x_offset, y_offset=y_offset)
 
     if dimension_plans.linear or dimension_plans.diameter:
         add_ezdxf_dimensions(doc, dimension_plans.linear, dimension_plans.diameter)
@@ -744,4 +766,6 @@ def convert_2d_drawing(
         line_types=line_types,
         template_spec=template_spec,
         add_template=add_template,
+        x_offset=x_offset,
+        y_offset=y_offset,
     )
