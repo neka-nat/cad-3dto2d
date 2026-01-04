@@ -9,7 +9,7 @@ def main():
     parser.add_argument(
         "--formats",
         type=str,
-        default="png",
+        default="png,svg",
         help="Comma-separated list: png,svg,jpg,jpeg,dxf",
     )
     parser.add_argument("--template", type=str, default="A4_LandscapeTD")

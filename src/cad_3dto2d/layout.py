@@ -69,34 +69,20 @@ def _combine_views(front: LayeredShapes, side_x: LayeredShapes, side_y: LayeredS
     )
 
 
-def fit_three_view_layout(
+def align_three_view_layout(
     layout: ThreeViewLayout,
     frame_bbox_mm: BoundingBox2D,
     paper_size_mm: Point2D | None,
-    frame_margin_ratio: float = 1.0,
     scale: float | None = None,
 ) -> ThreeViewLayout:
     bounds = _layered_bounds(layout.combined)
     if bounds is None:
         return layout
 
-    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bbox_mm
-    frame_width = frame_max_x - frame_min_x
-    frame_height = frame_max_y - frame_min_y
-    if frame_width <= 0 or frame_height <= 0:
-        return layout
-
-    size = bounds.size
-    if size.X <= 0 or size.Y <= 0:
-        return layout
-
-    fit_scale = min(frame_width / size.X, frame_height / size.Y) * frame_margin_ratio
-    if scale:
-        fit_scale *= scale
-
     center = bounds.center()
     translate_to_origin = (-center.X, -center.Y, -center.Z)
 
+    frame_min_x, frame_min_y, frame_max_x, frame_max_y = frame_bbox_mm
     frame_center_x = (frame_min_x + frame_max_x) / 2
     frame_center_y = (frame_min_y + frame_max_y) / 2
     if paper_size_mm:
@@ -110,8 +96,8 @@ def fit_three_view_layout(
 
     def apply(layered: LayeredShapes) -> LayeredShapes:
         updated = _transform_layered(layered, translate=translate_to_origin)
-        if fit_scale != 1.0:
-            updated = _transform_layered(updated, scale=fit_scale)
+        if scale and scale != 1.0:
+            updated = _transform_layered(updated, scale=scale)
         if target_center != (0.0, 0.0, 0.0):
             updated = _transform_layered(updated, translate=target_center)
         return updated
@@ -127,23 +113,22 @@ def layout_three_views(
     front: ViewProjection,
     side_x: ViewProjection,
     side_y: ViewProjection,
-    margin_ratio: float = 1.1,
+    gap_x_mm: float = 10.0,
+    gap_y_mm: float = 10.0,
     frame_bbox_mm: BoundingBox2D | None = None,
     paper_size_mm: Point2D | None = None,
-    frame_margin_ratio: float = 1.0,
     scale: float | None = None,
 ) -> ThreeViewLayout:
     front_size = front.bounding_size()
-    front_size_with_margin = (front_size[0] * margin_ratio, front_size[1] * margin_ratio)
 
     front_layer = LayeredShapes(visible=list(front.visible), hidden=list(front.hidden))
     side_x_layer = LayeredShapes(
-        visible=_transform(side_x.visible, rotate_deg=90, translate=(front_size_with_margin[0], 0.0, 0.0)),
-        hidden=_transform(side_x.hidden, rotate_deg=90, translate=(front_size_with_margin[0], 0.0, 0.0)),
+        visible=_transform(side_x.visible, rotate_deg=90, translate=(front_size[0] + gap_x_mm, 0.0, 0.0)),
+        hidden=_transform(side_x.hidden, rotate_deg=90, translate=(front_size[0] + gap_x_mm, 0.0, 0.0)),
     )
     side_y_layer = LayeredShapes(
-        visible=_transform(side_y.visible, translate=(0.0, -front_size_with_margin[1], 0.0)),
-        hidden=_transform(side_y.hidden, translate=(0.0, -front_size_with_margin[1], 0.0)),
+        visible=_transform(side_y.visible, translate=(0.0, -(front_size[1] + gap_y_mm), 0.0)),
+        hidden=_transform(side_y.hidden, translate=(0.0, -(front_size[1] + gap_y_mm), 0.0)),
     )
 
     combined = _combine_views(front_layer, side_x_layer, side_y_layer)
@@ -156,14 +141,13 @@ def layout_three_views(
 
     layout = ThreeViewLayout(front=front_layer, side_x=side_x_layer, side_y=side_y_layer, combined=combined)
     if frame_bbox_mm:
-        return fit_three_view_layout(
+        return align_three_view_layout(
             layout,
             frame_bbox_mm=frame_bbox_mm,
             paper_size_mm=paper_size_mm,
-            frame_margin_ratio=frame_margin_ratio,
             scale=scale,
         )
-    if scale:
+    if scale and scale != 1.0:
         front_layer = _transform_layered(front_layer, scale=scale)
         side_x_layer = _transform_layered(side_x_layer, scale=scale)
         side_y_layer = _transform_layered(side_y_layer, scale=scale)

@@ -14,7 +14,6 @@ from .annotations.dimensions import (
     DimensionText,
     DiameterDimensionSpec,
     LinearDimensionSpec,
-    default_settings_from_size,
     format_length,
 )
 from .annotations.features import FeatureCoordinates, extract_feature_coordinates, extract_primitives
@@ -158,7 +157,7 @@ def _resolve_dimension_settings(
     """Resolve dimension settings from shapes size, user settings, and overrides."""
     bounds = Compound(children=shapes).bounding_box()
     size = bounds.size
-    settings = dimension_settings or default_settings_from_size(size.X, size.Y)
+    settings = dimension_settings or DimensionSettings.default(size.X, size.Y)
     if dimension_settings is None and dimension_overrides:
         settings = DimensionSettings.model_validate(
             {**settings.model_dump(), **dimension_overrides}

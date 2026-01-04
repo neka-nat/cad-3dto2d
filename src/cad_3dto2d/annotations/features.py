@@ -113,4 +113,35 @@ def extract_feature_coordinates(primitives: PrimitiveResult, tol: float = 1e-3) 
         for y in _cluster_values(horizontal_y, tol)
         if abs(y - ymin) > tol and abs(y - ymax) > tol
     ]
-    return FeatureCoordinates(x_coords=x_coords, y_coords=y_coords, circles=primitives.circles, bounds=primitives.bounds)
+    circles = _dedupe_circles(primitives.circles, tol=tol)
+    circles = _filter_hole_circles(circles, primitives.bounds)
+    return FeatureCoordinates(x_coords=x_coords, y_coords=y_coords, circles=circles, bounds=primitives.bounds)
+
+
+def _dedupe_circles(circles: list[CirclePrimitive], tol: float) -> list[CirclePrimitive]:
+    if not circles:
+        return []
+    circles = sorted(circles, key=lambda c: (c.center[0], c.center[1], c.radius))
+    deduped: list[CirclePrimitive] = [circles[0]]
+    for circle in circles[1:]:
+        last = deduped[-1]
+        if (
+            abs(circle.center[0] - last.center[0]) <= tol
+            and abs(circle.center[1] - last.center[1]) <= tol
+            and abs(circle.radius - last.radius) <= tol
+        ):
+            continue
+        deduped.append(circle)
+    return deduped
+
+
+def _filter_hole_circles(
+    circles: list[CirclePrimitive],
+    bounds: BoundingBox2D,
+    max_radius_ratio: float = 0.35,
+) -> list[CirclePrimitive]:
+    if not circles:
+        return []
+    xmin, ymin, xmax, ymax = bounds
+    limit = max(xmax - xmin, ymax - ymin) * max_radius_ratio
+    return [circle for circle in circles if circle.radius <= limit]

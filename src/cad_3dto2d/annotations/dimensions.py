@@ -31,10 +31,6 @@ class DimensionSettings(BaseModel):
         )
 
 
-def default_settings_from_size(size_x: float, size_y: float) -> DimensionSettings:
-    return DimensionSettings.default(size_x, size_y)
-
-
 class DimensionText(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -64,6 +60,7 @@ class DiameterDimensionSpec(BaseModel):
     angle: float
     label: str | None
     settings: DimensionSettings
+
 
 DimensionOrientation = Literal["horizontal", "vertical"]
 DimensionSide = Literal["top", "bottom", "left", "right"]

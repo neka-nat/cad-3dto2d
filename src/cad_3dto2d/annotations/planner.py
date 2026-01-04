@@ -118,6 +118,9 @@ def plan_hole_dimensions(
     horizontal_side: DimensionSide,
     vertical_side: DimensionSide,
     max_circles: int = 2,
+    min_pitch_count: int = 3,
+    pitch_tol_ratio: float = 0.1,
+    min_pitch: float = 0.5,
 ) -> tuple[list[PlannedDimension], list[PlannedDiameterDimension], list[PlannedPitchDimension], dict[str, bool]]:
     xmin, ymin, xmax, ymax = features.bounds
     position_dims: list[PlannedDimension] = []
@@ -139,7 +142,7 @@ def plan_hole_dimensions(
         skip_horizontal: set[int] = set()
         skip_vertical: set[int] = set()
         for group in horizontal_groups:
-            if len(group) < 2:
+            if len(group) < min_pitch_count:
                 continue
             skip_horizontal.update(group)
             group_circles = [circles[i] for i in sorted(group, key=lambda i: circles[i].center[0])]
@@ -148,6 +151,10 @@ def plan_hole_dimensions(
             if not diffs:
                 continue
             pitch = sum(diffs) / len(diffs)
+            if pitch < min_pitch:
+                continue
+            if len(diffs) > 1 and (max(diffs) - min(diffs)) > pitch * pitch_tol_ratio:
+                continue
             y_ref = group_circles[0].center[1]
             pitch_dims.append(
                 PlannedPitchDimension(
@@ -161,7 +168,7 @@ def plan_hole_dimensions(
             )
             pitch_axes["horizontal"] = True
         for group in vertical_groups:
-            if len(group) < 2:
+            if len(group) < min_pitch_count:
                 continue
             skip_vertical.update(group)
             group_circles = [circles[i] for i in sorted(group, key=lambda i: circles[i].center[1])]
@@ -170,6 +177,10 @@ def plan_hole_dimensions(
             if not diffs:
                 continue
             pitch = sum(diffs) / len(diffs)
+            if pitch < min_pitch:
+                continue
+            if len(diffs) > 1 and (max(diffs) - min(diffs)) > pitch * pitch_tol_ratio:
+                continue
             x_ref = group_circles[0].center[0]
             pitch_dims.append(
                 PlannedPitchDimension(
