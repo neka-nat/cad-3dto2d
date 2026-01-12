@@ -41,6 +41,19 @@ from .views import project_three_views
 
 RASTER_IMAGE_TYPES = {"png", "jpg", "jpeg"}
 _TEXT_WIDTH_FACTOR = 0.6
+_FLIP_SIDE: dict[DimensionSide, DimensionSide] = {
+    "top": "bottom",
+    "bottom": "top",
+    "left": "right",
+    "right": "left",
+}
+
+
+def _candidate_sides(side: DimensionSide, need_fallback: bool) -> list[DimensionSide]:
+    """Return candidate sides for dimension placement, optionally including the flipped side."""
+    if not need_fallback:
+        return [side]
+    return [side, _FLIP_SIDE[side]]
 
 
 class ViewDimensionConfig(BaseModel):
@@ -86,27 +99,6 @@ def _centered_bbox(template_spec: TemplateSpec | None, bbox: BoundingBox2D | Non
     return (min_x, min_y, max_x, max_y)
 
 
-def _centered_frame_bounds(template_spec: TemplateSpec | None) -> BoundingBox2D | None:
-    if not template_spec:
-        return None
-    return _centered_bbox(template_spec, template_spec.frame_bbox_mm)
-
-
-def _centered_title_block_bounds(template_spec: TemplateSpec | None) -> BoundingBox2D | None:
-    if not template_spec:
-        return None
-    return _centered_bbox(template_spec, template_spec.title_block_bbox_mm)
-
-
-def _centered_reserved_bounds(template_spec: TemplateSpec | None) -> list[BoundingBox2D]:
-    if not template_spec or not template_spec.reserved_bbox_mm:
-        return []
-    centered: list[BoundingBox2D] = []
-    for bbox in template_spec.reserved_bbox_mm:
-        centered_bbox = _centered_bbox(template_spec, bbox)
-        if centered_bbox:
-            centered.append(centered_bbox)
-    return centered
 
 
 def _layered_bbox_2d(layered: LayeredShapes) -> BoundingBox2D | None:
@@ -286,17 +278,10 @@ def _resolve_basic_dimension_specs(
             else abs(primary_plan.p2[1] - primary_plan.p1[1]),
             settings.decimal_places,
         )
-        candidate_sides = [side]
-        if frame_bounds or avoid_bounds:
-            flipped = "bottom" if side == "top" else "top" if side in ("top", "bottom") else (
-                "left" if side == "right" else "right"
-            )
-            if flipped not in candidate_sides:
-                candidate_sides.append(flipped)
-
+        candidate_sides = _candidate_sides(side, bool(frame_bounds or avoid_bounds))
         selected_side = side
         selected_offset = primary_offset
-        if frame_bounds or avoid_bounds:
+        if len(candidate_sides) > 1:
             for candidate in candidate_sides:
                 candidate_plan = _basic_plan_for_side(bounds, orientation, candidate)
                 candidate_offset = _basic_offset_for_side(bounds, orientation, candidate, settings, frame_bounds)
@@ -499,17 +484,10 @@ def _resolve_line_dimension_specs(
                 )
             return offset_value
 
-        candidate_sides = [plan.side]
-        if frame_bounds or avoid_bounds:
-            flipped = "bottom" if plan.side == "top" else "top" if plan.side in ("top", "bottom") else (
-                "left" if plan.side == "right" else "right"
-            )
-            if flipped not in candidate_sides:
-                candidate_sides.append(flipped)
-
+        candidate_sides = _candidate_sides(plan.side, bool(frame_bounds or avoid_bounds))
         selected_side = plan.side
         selected_offset = resolve_offset(plan.side)
-        if frame_bounds or avoid_bounds:
+        if len(candidate_sides) > 1:
             for side in candidate_sides:
                 offset = resolve_offset(side)
                 text = _dimension_text_for_plan(plan, side, offset, label, settings)
@@ -671,9 +649,14 @@ def _build_layers(
 
     # Generate dimensions for each view
     if add_dimensions:
-        frame_bounds = _centered_frame_bounds(template_spec)
-        title_block_bounds = _centered_title_block_bounds(template_spec)
-        avoid_bounds = _centered_reserved_bounds(template_spec)
+        frame_bounds = _centered_bbox(template_spec, template_spec.frame_bbox_mm if template_spec else None)
+        title_block_bounds = _centered_bbox(template_spec, template_spec.title_block_bbox_mm if template_spec else None)
+        avoid_bounds: list[BoundingBox2D] = []
+        if template_spec and template_spec.reserved_bbox_mm:
+            for bbox in template_spec.reserved_bbox_mm:
+                centered = _centered_bbox(template_spec, bbox)
+                if centered:
+                    avoid_bounds.append(centered)
         if title_block_bounds:
             avoid_bounds.append(title_block_bounds)
         if not avoid_bounds:

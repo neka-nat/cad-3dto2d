@@ -76,6 +76,43 @@ def _has_close(value: float, values: list[float], tol: float) -> bool:
     return any(abs(value - other) <= tol for other in values)
 
 
+def _detect_pitch_dimension(
+    circles: list[CirclePrimitive],
+    group_indices: list[int],
+    axis: int,
+    side: DimensionSide,
+    min_pitch: float,
+    pitch_tol_ratio: float,
+) -> PlannedPitchDimension | None:
+    """Detect a pitch pattern along the given axis (0=x, 1=y)."""
+    other_axis = 1 - axis
+    orientation: DimensionOrientation = "horizontal" if axis == 0 else "vertical"
+    sorted_indices = sorted(group_indices, key=lambda i: circles[i].center[axis])
+    group_circles = [circles[i] for i in sorted_indices]
+    coords = [c.center[axis] for c in group_circles]
+    diffs = [coords[i + 1] - coords[i] for i in range(len(coords) - 1) if coords[i + 1] > coords[i]]
+    if not diffs:
+        return None
+    pitch = sum(diffs) / len(diffs)
+    if pitch < min_pitch:
+        return None
+    if len(diffs) > 1 and (max(diffs) - min(diffs)) > pitch * pitch_tol_ratio:
+        return None
+    ref = group_circles[0].center[other_axis]
+    if axis == 0:
+        p1, p2 = (coords[0], ref), (coords[-1], ref)
+    else:
+        p1, p2 = (ref, coords[0]), (ref, coords[-1])
+    return PlannedPitchDimension(
+        p1=p1,
+        p2=p2,
+        orientation=orientation,
+        side=side,
+        count=len(group_indices),
+        pitch=pitch,
+    )
+
+
 def plan_internal_dimensions(
     features: FeatureCoordinates,
     horizontal_side: DimensionSide,
@@ -144,55 +181,19 @@ def plan_hole_dimensions(
         for group in horizontal_groups:
             if len(group) < min_pitch_count:
                 continue
-            skip_horizontal.update(group)
-            group_circles = [circles[i] for i in sorted(group, key=lambda i: circles[i].center[0])]
-            xs = [c.center[0] for c in group_circles]
-            diffs = [xs[i + 1] - xs[i] for i in range(len(xs) - 1) if xs[i + 1] > xs[i]]
-            if not diffs:
-                continue
-            pitch = sum(diffs) / len(diffs)
-            if pitch < min_pitch:
-                continue
-            if len(diffs) > 1 and (max(diffs) - min(diffs)) > pitch * pitch_tol_ratio:
-                continue
-            y_ref = group_circles[0].center[1]
-            pitch_dims.append(
-                PlannedPitchDimension(
-                    p1=(xs[0], y_ref),
-                    p2=(xs[-1], y_ref),
-                    orientation="horizontal",
-                    side=horizontal_side,
-                    count=len(group),
-                    pitch=pitch,
-                )
-            )
-            pitch_axes["horizontal"] = True
+            pitch_dim = _detect_pitch_dimension(circles, group, axis=0, side=horizontal_side, min_pitch=min_pitch, pitch_tol_ratio=pitch_tol_ratio)
+            if pitch_dim:
+                skip_horizontal.update(group)
+                pitch_dims.append(pitch_dim)
+                pitch_axes["horizontal"] = True
         for group in vertical_groups:
             if len(group) < min_pitch_count:
                 continue
-            skip_vertical.update(group)
-            group_circles = [circles[i] for i in sorted(group, key=lambda i: circles[i].center[1])]
-            ys = [c.center[1] for c in group_circles]
-            diffs = [ys[i + 1] - ys[i] for i in range(len(ys) - 1) if ys[i + 1] > ys[i]]
-            if not diffs:
-                continue
-            pitch = sum(diffs) / len(diffs)
-            if pitch < min_pitch:
-                continue
-            if len(diffs) > 1 and (max(diffs) - min(diffs)) > pitch * pitch_tol_ratio:
-                continue
-            x_ref = group_circles[0].center[0]
-            pitch_dims.append(
-                PlannedPitchDimension(
-                    p1=(x_ref, ys[0]),
-                    p2=(x_ref, ys[-1]),
-                    orientation="vertical",
-                    side=vertical_side,
-                    count=len(group),
-                    pitch=pitch,
-                )
-            )
-            pitch_axes["vertical"] = True
+            pitch_dim = _detect_pitch_dimension(circles, group, axis=1, side=vertical_side, min_pitch=min_pitch, pitch_tol_ratio=pitch_tol_ratio)
+            if pitch_dim:
+                skip_vertical.update(group)
+                pitch_dims.append(pitch_dim)
+                pitch_axes["vertical"] = True
         used_x: list[float] = []
         used_y: list[float] = []
         for idx, circle in enumerate(circles):
