@@ -92,6 +92,17 @@ def _combine_views(front: LayeredShapes, side_x: LayeredShapes, side_y: LayeredS
     )
 
 
+def _apply_layout_offset(layout: ThreeViewLayout, offset: Point2D) -> ThreeViewLayout:
+    if offset == (0.0, 0.0):
+        return layout
+    translate = (offset[0], offset[1], 0.0)
+    front = _transform_layered(layout.front, translate=translate)
+    side_x = _transform_layered(layout.side_x, translate=translate)
+    side_y = _transform_layered(layout.side_y, translate=translate)
+    combined = _combine_views(front, side_x, side_y)
+    return ThreeViewLayout(front=front, side_x=side_x, side_y=side_y, combined=combined)
+
+
 def align_three_view_layout(
     layout: ThreeViewLayout,
     frame_bbox_mm: BoundingBox2D,
@@ -136,10 +147,12 @@ def layout_three_views(
     front: ViewProjection,
     side_x: ViewProjection,
     side_y: ViewProjection,
-    gap_x_mm: float = 10.0,
-    gap_y_mm: float = 10.0,
+    gap_x_mm: float = 30.0,
+    gap_y_mm: float = 30.0,
     side_position: Literal["left", "right"] = "right",
     top_position: Literal["up", "down"] = "down",
+    layout_offset_x: float = 0.0,
+    layout_offset_y: float = 0.0,
     frame_bbox_mm: BoundingBox2D | None = None,
     paper_size_mm: Point2D | None = None,
     scale: float | None = None,
@@ -179,16 +192,18 @@ def layout_three_views(
 
     layout = ThreeViewLayout(front=front_layer, side_x=side_x_layer, side_y=side_y_layer, combined=combined)
     if frame_bbox_mm:
-        return align_three_view_layout(
+        layout = align_three_view_layout(
             layout,
             frame_bbox_mm=frame_bbox_mm,
             paper_size_mm=paper_size_mm,
             scale=scale,
         )
-    if scale and scale != 1.0:
+    elif scale and scale != 1.0:
         front_layer = _transform_layered(front_layer, scale=scale)
         side_x_layer = _transform_layered(side_x_layer, scale=scale)
         side_y_layer = _transform_layered(side_y_layer, scale=scale)
         combined = _combine_views(front_layer, side_x_layer, side_y_layer)
-        return ThreeViewLayout(front=front_layer, side_x=side_x_layer, side_y=side_y_layer, combined=combined)
+        layout = ThreeViewLayout(front=front_layer, side_x=side_x_layer, side_y=side_y_layer, combined=combined)
+    if layout_offset_x or layout_offset_y:
+        layout = _apply_layout_offset(layout, (layout_offset_x, layout_offset_y))
     return layout

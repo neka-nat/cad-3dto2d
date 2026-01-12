@@ -30,6 +30,8 @@ def main():
         default="down",
         help="Place the top view above or below the front view.",
     )
+    parser.add_argument("--layout_offset_x", type=float, default=0.0)
+    parser.add_argument("--layout_offset_y", type=float, default=0.0)
     parser.add_argument("--add_dimensions", action="store_true")
     args = parser.parse_args()
     formats = [fmt.strip().lower() for fmt in args.formats.split(",") if fmt.strip()]
@@ -52,6 +54,8 @@ def main():
         y_offset=args.y_offset,
         side_position=args.side_position,
         top_position=args.top_position,
+        layout_offset_x=args.layout_offset_x,
+        layout_offset_y=args.layout_offset_y,
         add_dimensions=args.add_dimensions,
     )
 

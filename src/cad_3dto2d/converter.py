@@ -613,6 +613,8 @@ def _build_layers(
     y_offset: float,
     side_position: Literal["left", "right"],
     top_position: Literal["up", "down"],
+    layout_offset_x: float,
+    layout_offset_y: float,
     add_dimensions: bool,
     dimension_settings: DimensionSettings | None,
     dimension_overrides: dict[str, object] | None,
@@ -622,6 +624,10 @@ def _build_layers(
     diameter_dims: list[DiameterDimensionSpec] = []
 
     # Project and layout the three views
+    template_offset_x = template_spec.layout_offset_mm[0] if template_spec else 0.0
+    template_offset_y = template_spec.layout_offset_mm[1] if template_spec else 0.0
+    combined_offset_x = template_offset_x + layout_offset_x
+    combined_offset_y = template_offset_y + layout_offset_y
     views = project_three_views(model)
     layout = layout_three_views(
         views.front,
@@ -629,6 +635,8 @@ def _build_layers(
         views.side_y,
         side_position=side_position,
         top_position=top_position,
+        layout_offset_x=combined_offset_x,
+        layout_offset_y=combined_offset_y,
         frame_bbox_mm=template_spec.frame_bbox_mm if template_spec else None,
         paper_size_mm=template_spec.paper_size_mm if template_spec else None,
         scale=template_spec.default_scale if template_spec else None,
@@ -764,6 +772,8 @@ def convert_2d_drawing(
     y_offset: float = 0,
     side_position: Literal["left", "right"] = "right",
     top_position: Literal["up", "down"] = "down",
+    layout_offset_x: float = 0.0,
+    layout_offset_y: float = 0.0,
     style_name: str | None = "iso",
     add_dimensions: bool = False,
     dimension_settings: DimensionSettings | None = None,
@@ -781,6 +791,8 @@ def convert_2d_drawing(
         y_offset,
         side_position,
         top_position,
+        layout_offset_x,
+        layout_offset_y,
         add_dimensions,
         dimension_settings,
         dimension_overrides,
