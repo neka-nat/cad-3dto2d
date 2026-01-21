@@ -1,0 +1,19 @@
+line_types:
+  visible: CONTINUOUS
+  hidden: DASHED
+  template: CONTINUOUS
+  dims: CONTINUOUS
+dimension:
+  diameter_symbol: D
+  pitch_prefix: P
+  offset: 5.0
+  arrow_size: 2.0
+  arrow_block: ARCHTICK
+  arrow_block1: ARCHTICK
+  arrow_block2: ARCHTICK
+  extension_gap: 0.7
+  extension_offset: 0.7
+  extension_extension: 1.4
+  text_height: 3.0
+  text_gap: 0.8
+  decimal_places: 1

@@ -247,12 +247,12 @@ def _templates_dir(templates_dir: Path | None = None) -> Path:
 
 
 @lru_cache
-def _load_index(index_path: str) -> dict[str, Any]:
-    data = yaml.safe_load(Path(index_path).read_text(encoding="utf-8"))
+def _load_template_file(template_path: str) -> dict[str, Any]:
+    data = yaml.safe_load(Path(template_path).read_text(encoding="utf-8"))
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise ValueError(f"Invalid template index format: {index_path}")
+        raise ValueError(f"Invalid template format: {template_path}")
     return data
 
 
@@ -260,13 +260,12 @@ def load_template(
     template_name: str, templates_dir: Path | None = None
 ) -> TemplateSpec:
     templates_dir = _templates_dir(templates_dir)
-    index_path = templates_dir / "index.yaml"
-    data = _load_index(str(index_path))
-    raw = data.get(template_name)
-    if raw is None:
-        raise KeyError(f"Template not found: {template_name}")
-    if not isinstance(raw, dict):
-        raise ValueError(f"Invalid template entry for: {template_name}")
+    template_path = templates_dir / f"{template_name}.yaml"
+    if not template_path.exists():
+        raise FileNotFoundError(f"Template not found: {template_name}")
+    raw = _load_template_file(str(template_path))
+    if not raw:
+        raise ValueError(f"Template is empty: {template_name}")
 
     payload = dict(raw)
     payload.setdefault("default_scale", 1.0)

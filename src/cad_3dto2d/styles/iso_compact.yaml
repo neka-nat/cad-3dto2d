@@ -1,18 +1,19 @@
 line_types:
   visible: CONTINUOUS
-  hidden: DASHED
+  hidden: DOT
   template: CONTINUOUS
   dims: CONTINUOUS
 dimension:
   diameter_symbol: D
   pitch_prefix: P
-  arrow_size: 2.0
-  arrow_block: CLOSED
-  arrow_block1: CLOSED
-  arrow_block2: CLOSED
-  extension_gap: 0.5
-  extension_offset: 0.5
-  extension_extension: 1.2
-  text_height: 2.8
-  text_gap: 0.6
-  decimal_places: 1
+  offset: 4.0
+  arrow_size: 1.6
+  arrow_block: OPEN
+  arrow_block1: OPEN
+  arrow_block2: OPEN
+  extension_gap: 0.4
+  extension_offset: 0.4
+  extension_extension: 0.8
+  text_height: 2.4
+  text_gap: 0.4
+  decimal_places: 0

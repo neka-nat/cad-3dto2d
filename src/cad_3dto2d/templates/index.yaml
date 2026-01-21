@@ -1,91 +1,13 @@
-A4_LandscapeTD:
-  kind: svg
-  file: A4_LandscapeTD.svg
-  paper_size_mm: [297, 210]
-  frame_bbox_mm: [10, 10, 287, 200]
-  title_block_bbox_mm: [147, 153, 287, 200]
-  side_position: right
-  top_position: down
-  layout_offset_mm: [-40, 0]
-  default_scale: 1.0
-
-A4_LandscapeParam:
-  kind: parametric
-  paper_size_mm: [297, 210]
-  frame:
-    margin_mm:
-      left: 10
-      right: 10
-      top: 10
-      bottom: 10
-  title_block:
-    pos: top_right
-    size_mm: [140, 47]
-    grid:
-      rows_mm: [8, 8, 8, 23]
-      cols_mm: [60, 40, 20, 20]
-    cells:
-      - cell: [0, 0]
-        span: [1, 4]
-        text: DRAWING TITLE
-        align: center
-        valign: middle
-        text_height_mm: 3.5
-      - cell: [1, 0]
-        span: [1, 2]
-        text: DRAWING NO.
-        align: left
-        valign: middle
-        text_height_mm: 3.0
-        offset_mm: [2, 0]
-      - cell: [1, 2]
-        span: [1, 2]
-        key: drawing_no
-        default: "0000"
-        align: right
-        valign: middle
-        text_height_mm: 3.0
-        offset_mm: [-2, 0]
-      - cell: [2, 0]
-        text: SCALE
-        align: left
-        valign: middle
-        text_height_mm: 3.0
-        offset_mm: [2, 0]
-      - cell: [2, 1]
-        key: scale
-        default: "1:1"
-        align: left
-        valign: middle
-        text_height_mm: 3.0
-        offset_mm: [2, 0]
-      - cell: [2, 2]
-        text: DATE
-        align: left
-        valign: middle
-        text_height_mm: 3.0
-        offset_mm: [2, 0]
-      - cell: [2, 3]
-        key: date
-        default: "YYYY-MM-DD"
-        align: right
-        valign: middle
-        text_height_mm: 3.0
-        offset_mm: [-2, 0]
-      - cell: [3, 0]
-        span: [1, 3]
-        text: REMARKS
-        align: left
-        valign: top
-        text_height_mm: 3.0
-        offset_mm: [2, -2]
-      - cell: [3, 3]
-        text: REV
-        align: center
-        valign: top
-        text_height_mm: 3.0
-        offset_mm: [0, -2]
-  side_position: right
-  top_position: up
-  layout_offset_mm: [-40, 0]
-  default_scale: 1.0
+templates:
+  A4_LandscapeTD:
+    description: SVG A4 landscape template with a title block.
+  A4_LandscapeParam:
+    description: Parametric A4 landscape template with top-right title block.
+  A4_LandscapeParamCompactBR:
+    description: Parametric A4 landscape with compact bottom-right title block.
+  A4_LandscapeParamWideBottom:
+    description: Parametric A4 landscape with wide bottom title block.
+  A4_LandscapeParamRightStrip:
+    description: Parametric A4 landscape with right-side strip title block.
+  A4_LandscapeParamTwoTier:
+    description: Parametric A4 landscape with two-tier bottom-right title block.

@@ -6,13 +6,14 @@ line_types:
 dimension:
   diameter_symbol: D
   pitch_prefix: P
-  arrow_size: 3.2
+  offset: 10.0
+  arrow_size: 4.0
   arrow_block: CLOSED
   arrow_block1: CLOSED
   arrow_block2: CLOSED
-  extension_gap: 1.2
-  extension_offset: 1.2
-  extension_extension: 2.5
-  text_height: 4.5
-  text_gap: 1.5
+  extension_gap: 1.8
+  extension_offset: 1.8
+  extension_extension: 3.5
+  text_height: 5.2
+  text_gap: 2.2
   decimal_places: 1

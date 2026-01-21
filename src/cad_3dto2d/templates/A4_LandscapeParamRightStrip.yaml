@@ -1,0 +1,99 @@
+kind: parametric
+paper_size_mm: [297, 210]
+frame:
+  margin_mm:
+    left: 10
+    right: 10
+    top: 10
+    bottom: 10
+title_block:
+  pos: top_right
+  size_mm: [45, 150]
+  grid:
+    rows_mm: [15, 15, 15, 15, 15, 15, 15, 15, 15, 15]
+    cols_mm: [45]
+  cells:
+    - cell: [0, 0]
+      key: drawing_no
+      default: "0000"
+      prefix: "DWG: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [1, 0]
+      key: title
+      default: "PART"
+      prefix: "TITLE: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [2, 0]
+      key: scale
+      default: "1:1"
+      prefix: "SCALE: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [3, 0]
+      key: date
+      default: "YYYY-MM-DD"
+      prefix: "DATE: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [4, 0]
+      key: material
+      default: "-"
+      prefix: "MAT: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [5, 0]
+      key: weight
+      default: "-"
+      prefix: "WT: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [6, 0]
+      key: checked
+      default: "-"
+      prefix: "CHK: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [7, 0]
+      key: approved
+      default: "-"
+      prefix: "APR: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [8, 0]
+      key: revision
+      default: "A"
+      prefix: "REV: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+    - cell: [9, 0]
+      key: note
+      default: "-"
+      prefix: "NOTE: "
+      align: left
+      valign: middle
+      text_height_mm: 2.5
+      offset_mm: [2, 0]
+side_position: right
+top_position: up
+layout_offset_mm: [-40, 0]
+default_scale: 1.0

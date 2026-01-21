@@ -2,8 +2,26 @@ styles:
   iso:
     description: Baseline ISO style (default).
   iso_compact:
-    description: Smaller text/arrows for dense drawings.
+    description: Compact style with small text and open arrows.
   iso_roomy:
-    description: Larger text and gaps for readability.
+    description: Large text and generous spacing for readability.
   iso_precision:
-    description: Higher precision with more decimal places.
+    description: High precision with open arrows and more decimals.
+  iso_archtick:
+    description: Architectural ticks for dimensions with compact text.
+  iso_arrow_open90:
+    description: Open 90-degree arrowheads.
+  iso_arrow_open30:
+    description: Open 30-degree arrowheads.
+  iso_arrow_closedblank:
+    description: Hollow closed arrowheads.
+  iso_arrow_datumblank:
+    description: Hollow datum arrowheads.
+  iso_arrow_datumfilled:
+    description: Filled datum arrowheads.
+  iso_arrow_ez_arrow:
+    description: EZ_ARROW arrowheads.
+  iso_arrow_ez_arrow_blank:
+    description: EZ_ARROW blank arrowheads.
+  iso_arrow_ez_arrow_filled:
+    description: EZ_ARROW filled arrowheads.
