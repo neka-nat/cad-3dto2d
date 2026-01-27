@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from pydantic import BaseModel, ConfigDict
 
 from ..types import Point2D
@@ -15,6 +17,7 @@ class PlannedDimension(BaseModel):
     orientation: DimensionOrientation
     side: DimensionSide
     label: str | None = None
+    base_ref: float | None = None
 
 
 class PlannedDiameterDimension(BaseModel):
@@ -35,6 +38,7 @@ class PlannedPitchDimension(BaseModel):
     side: DimensionSide
     count: int
     pitch: float
+    base_ref: float | None
 
 
 class PlanningRules(BaseModel):
@@ -47,6 +51,21 @@ class PlanningRules(BaseModel):
     max_diameter_dims: int = 2
     collapse_diameter_with_pitch: bool = True
     max_diameter_groups: int = 1
+    prefer_bolt_circle_note: bool = True
+    bolt_circle_min_count: int = 4
+    bolt_circle_radius_tol_ratio: float = 0.02
+    bolt_circle_angle_tol_deg: float = 2.0
+    suppress_hole_dims_when_bolt_circle: bool = True
+
+
+class BoltCirclePattern(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    center: Point2D
+    hole_radius: float
+    count: int
+    pcd_radius: float
+    equal_spaced: bool
 
 
 def _select_coords(coords: list[float], max_count: int) -> list[float]:
@@ -84,6 +103,7 @@ def _detect_pitch_dimension(
     side: DimensionSide,
     min_pitch: float,
     pitch_tol_ratio: float,
+    base_ref: float | None,
 ) -> PlannedPitchDimension | None:
     """Detect a pitch pattern along the given axis (0=x, 1=y)."""
     other_axis = 1 - axis
@@ -115,6 +135,7 @@ def _detect_pitch_dimension(
         side=side,
         count=len(group_indices),
         pitch=pitch,
+        base_ref=base_ref,
     )
 
 
@@ -170,6 +191,8 @@ def plan_hole_dimensions(
     dict[str, bool],
 ]:
     xmin, ymin, xmax, ymax = features.bounds
+    y_ref = ymax if horizontal_side == "top" else ymin
+    x_ref = xmax if vertical_side == "right" else xmin
     position_dims: list[PlannedDimension] = []
     diameter_dims: list[PlannedDiameterDimension] = []
     pitch_dims: list[PlannedPitchDimension] = []
@@ -200,6 +223,7 @@ def plan_hole_dimensions(
                 side=horizontal_side,
                 min_pitch=min_pitch,
                 pitch_tol_ratio=pitch_tol_ratio,
+                base_ref=y_ref,
             )
             if pitch_dim:
                 skip_horizontal.update(group)
@@ -215,6 +239,7 @@ def plan_hole_dimensions(
                 side=vertical_side,
                 min_pitch=min_pitch,
                 pitch_tol_ratio=pitch_tol_ratio,
+                base_ref=x_ref,
             )
             if pitch_dim:
                 skip_vertical.update(group)
@@ -232,6 +257,7 @@ def plan_hole_dimensions(
                         p2=(cx, cy),
                         orientation="horizontal",
                         side=horizontal_side,
+                        base_ref=y_ref,
                     )
                 )
             if idx not in skip_vertical and not _has_close(cy, used_y, tol):
@@ -242,6 +268,7 @@ def plan_hole_dimensions(
                         p2=(cx, cy),
                         orientation="vertical",
                         side=vertical_side,
+                        base_ref=x_ref,
                     )
                 )
         if pitch_axes["horizontal"] and pitch_axes["vertical"] and not position_dims:
@@ -288,3 +315,74 @@ def apply_planning_rules(
         line_dims.extend(internal_dims[: min(remaining, rules.max_internal_dims)])
     diameter_dims = hole_diameters[: rules.max_diameter_dims]
     return line_dims, diameter_dims
+
+
+def _distance(a: Point2D, b: Point2D) -> float:
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    return math.hypot(dx, dy)
+
+
+def _angles_deg(points: list[Point2D], center: Point2D) -> list[float]:
+    out: list[float] = []
+    for p in points:
+        out.append(math.degrees(math.atan2(p[1] - center[1], p[0] - center[0])) % 360.0)
+    return out
+
+
+def detect_bolt_circle_pattern(
+    circles: list[CirclePrimitive],
+    bounds: tuple[float, float, float, float],
+    min_count: int = 4,
+    radius_tol_ratio: float = 0.02,  # 半径ばらつき許容(相対)
+    angle_tol_deg: float = 2.0,  # 等配許容(度)
+) -> BoltCirclePattern | None:
+    if not circles:
+        return None
+
+    xmin, ymin, xmax, ymax = bounds
+    center = ((xmin + xmax) / 2, (ymin + ymax) / 2)
+
+    # 半径（穴径）ごとにグループ化
+    groups = group_circles_by_radius(circles, tol=1e-3)
+
+    best: BoltCirclePattern | None = None
+
+    for group in groups:
+        if len(group) < min_count:
+            continue
+
+        pts = [c.center for c in group]
+        radii = [_distance(p, center) for p in pts]
+        mean_r = sum(radii) / len(radii)
+
+        if mean_r <= 1e-6:
+            continue
+
+        tol_r = max(1e-3, mean_r * radius_tol_ratio)
+        if max(abs(r - mean_r) for r in radii) > tol_r:
+            continue
+
+        # 等配チェック（簡易）
+        ang = sorted(_angles_deg(pts, center))
+        n = len(ang)
+        step = 360.0 / n
+        diffs = [(ang[(i + 1) % n] - ang[i]) % 360.0 for i in range(n)]
+        equal_spaced = max(abs(d - step) for d in diffs) <= angle_tol_deg
+
+        candidate = BoltCirclePattern(
+            center=center,
+            hole_radius=group[0].radius,
+            count=len(group),
+            pcd_radius=mean_r,
+            equal_spaced=equal_spaced,
+        )
+
+        # “最も穴数が多い”→同数なら“PCDが大きい”を優先
+        if best is None:
+            best = candidate
+        else:
+            if (candidate.count, candidate.pcd_radius) > (best.count, best.pcd_radius):
+                best = candidate
+
+    return best

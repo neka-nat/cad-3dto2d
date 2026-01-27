@@ -67,6 +67,15 @@ class DiameterDimensionSpec(BaseModel):
     settings: DimensionSettings
 
 
+class LeaderNoteSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    target: Point2D  # 矢先（狙う点）
+    angle: float  # leader の向き（deg）
+    text: str
+    settings: DimensionSettings
+
+
 DimensionOrientation = Literal["horizontal", "vertical"]
 DimensionSide = Literal["top", "bottom", "left", "right"]
 

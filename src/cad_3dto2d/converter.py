@@ -9,10 +9,11 @@ from build123d import Compound, ShapeList, import_step, import_svg
 from pydantic import BaseModel, ConfigDict
 
 from .annotations.dimensions import (
+    DiameterDimensionSpec,
     DimensionSettings,
     DimensionSide,
     DimensionText,
-    DiameterDimensionSpec,
+    LeaderNoteSpec,
     LinearDimensionSpec,
     format_length,
 )
@@ -26,18 +27,20 @@ from .annotations.planner import (
     PlannedDimension,
     PlanningRules,
     apply_planning_rules,
+    detect_bolt_circle_pattern,
     group_circles_by_radius,
     plan_hole_dimensions,
     plan_internal_dimensions,
 )
+from .layout import LayeredShapes, layout_three_views
 from .rendering.dxf_backend import (
     add_ezdxf_dimensions,
+    add_ezdxf_leader_notes,
     apply_template_to_doc,
     export_dxf_layers,
     render_dxf_to_svg,
 )
 from .rendering.svg_tools import rasterize_svg
-from .layout import LayeredShapes, layout_three_views
 from .styles import load_style
 from .templates import SvgTemplateSpec, TemplateSpec, load_template
 from .types import BoundingBox2D, Point2D, Shape
@@ -82,6 +85,7 @@ class DimensionPlanOutput(NamedTuple):
 
     linear: list[LinearDimensionSpec]
     diameter: list[DiameterDimensionSpec]
+    leader_notes: list[LeaderNoteSpec]
 
 
 def _load_svg_template(template_spec: SvgTemplateSpec) -> ShapeList[Shape]:
@@ -195,17 +199,32 @@ def _dimension_base_for_plan(
 ) -> tuple[Point2D, float]:
     if plan.orientation == "horizontal":
         sign = 1 if side == "top" else -1
+
         base_y = (
-            max(plan.p1[1], plan.p2[1])
-            if side == "top"
-            else min(plan.p1[1], plan.p2[1])
+            plan.base_ref
+            if plan.base_ref is not None
+            else (
+                max(plan.p1[1], plan.p2[1])
+                if side == "top"
+                else min(plan.p1[1], plan.p2[1])
+            )
         )
+
         dim_y = base_y + sign * offset
         return (plan.p1[0], dim_y), 0.0
+
     sign = 1 if side == "right" else -1
+
     base_x = (
-        max(plan.p1[0], plan.p2[0]) if side == "right" else min(plan.p1[0], plan.p2[0])
+        plan.base_ref
+        if plan.base_ref is not None
+        else (
+            max(plan.p1[0], plan.p2[0])
+            if side == "right"
+            else min(plan.p1[0], plan.p2[0])
+        )
     )
+
     dim_x = base_x + sign * offset
     return (dim_x, plan.p1[1]), 90.0
 
@@ -337,12 +356,75 @@ def _resolve_basic_dimension_specs(
     return specs
 
 
+def _leader_text_for_angle(
+    target: Point2D,
+    angle_deg: float,
+    label: str,
+    settings: DimensionSettings,
+) -> DimensionText:
+    angle_rad = math.radians(angle_deg)
+    dir_x = math.cos(angle_rad)
+    dir_y = math.sin(angle_rad)
+    leader_length = (
+        settings.arrow_size * 4 + settings.text_gap * 2 + settings.text_height
+    )
+    end = (target[0] + dir_x * leader_length, target[1] + dir_y * leader_length)
+    text_pos = (end[0] + dir_x * settings.text_gap, end[1] + dir_y * settings.text_gap)
+    anchor = "start" if dir_x >= 0 else "end"
+    return DimensionText(
+        x=text_pos[0],
+        y=text_pos[1],
+        text=label,
+        height=settings.text_height,
+        anchor=anchor,
+    )
+
+
+def _resolve_leader_note_specs(
+    notes: list[LeaderNoteSpec],
+    frame_bounds: BoundingBox2D | None,
+    avoid_bounds: list[BoundingBox2D] | None,
+) -> list[LeaderNoteSpec]:
+    if not notes:
+        return []
+    resolved: list[LeaderNoteSpec] = []
+    padding = 1.0  # 少しゆるめ（好みで settings から決めてもOK）
+
+    # note同士も避けたいので、配置済みテキストbboxを追加していく
+    dynamic_avoid: list[BoundingBox2D] = list(avoid_bounds) if avoid_bounds else []
+
+    for note in notes:
+        settings = note.settings
+        # 角度候補を増やす（混雑時に効く）
+        base = note.angle
+        candidates = [base, base + 180.0]
+        for step in (30, 60, 90, 120, 150):
+            candidates.append(base + step)
+            candidates.append(base - step)
+
+        selected = note.angle
+        for ang in candidates:
+            text = _leader_text_for_angle(note.target, ang, note.text, settings)
+            if _text_fits_bounds(
+                text, frame_bounds, padding=padding, avoid_bounds=dynamic_avoid
+            ):
+                selected = ang
+                # テキストbboxを避け領域に追加
+                dynamic_avoid.append(_text_bounds(text))
+                break
+
+        resolved.append(note.model_copy(update={"angle": selected}))
+    return resolved
+
+
 def _plan_feature_dimensions(
     features: FeatureCoordinates,
     config: ViewDimensionConfig,
     settings: DimensionSettings,
     rules: PlanningRules,
-) -> tuple[list[PlannedDimension], list[PlannedDiameterDimension], dict[str, bool]]:
+) -> tuple[
+    list[PlannedDimension], list[PlannedDiameterDimension], list[LeaderNoteSpec]
+]:
     """Plan dimensions for internal features and holes."""
     internal_dims = plan_internal_dimensions(
         features,
@@ -366,8 +448,57 @@ def _plan_feature_dimensions(
                 orientation=plan.orientation,
                 side=plan.side,
                 label=label,
+                base_ref=plan.base_ref,
             )
         )
+
+    notes: list[LeaderNoteSpec] = []
+    bolt = None
+    if rules.prefer_bolt_circle_note:
+        bolt = detect_bolt_circle_pattern(
+            features.circles,
+            features.bounds,
+            min_count=rules.bolt_circle_min_count,
+            radius_tol_ratio=rules.bolt_circle_radius_tol_ratio,
+            angle_tol_deg=rules.bolt_circle_angle_tol_deg,
+        )
+
+    if bolt is not None and bolt.equal_spaced:
+        hole_d = bolt.hole_radius * 2
+        pcd_d = bolt.pcd_radius * 2
+
+        # 表記は好みがあるので、まずはシンプルに（styleで上書きできるようにしても良い）
+        text = (
+            f"{bolt.count}x{settings.diameter_symbol}{format_length(hole_d, settings.decimal_places)} "
+            f"EQ SP ON {settings.diameter_symbol}{format_length(pcd_d, settings.decimal_places)} PCD"
+        )
+
+        # leaderの狙い点：どれか1つの穴中心（最も右上などにしておくと見やすい）
+        target_circle = max(features.circles, key=lambda c: (c.center[0], c.center[1]))
+        # 狙いは穴の外周上にする（径寸法っぽく見える）
+        angle_candidates = [45, 135] if config.horizontal_dir >= 0 else [-45, -135]
+        leader_angle = angle_candidates[0]
+
+        # 矢先を外周に置く
+        ang = math.radians(leader_angle)
+        target = (
+            target_circle.center[0] + math.cos(ang) * target_circle.radius,
+            target_circle.center[1] + math.sin(ang) * target_circle.radius,
+        )
+
+        notes.append(
+            LeaderNoteSpec(
+                target=target,
+                angle=leader_angle,
+                text=text,
+                settings=settings,
+            )
+        )
+
+        if rules.suppress_hole_dims_when_bolt_circle:
+            hole_positions = []
+            pitch_line_dims = []
+            hole_diameters = []
 
     line_dims, diameter_dims = apply_planning_rules(
         hole_positions,
@@ -403,7 +534,7 @@ def _plan_feature_dimensions(
             )
         diameter_dims = collapsed
 
-    return line_dims, diameter_dims, pitch_axes
+    return line_dims, diameter_dims, notes
 
 
 def _dimension_text_for_plan(
@@ -415,11 +546,18 @@ def _dimension_text_for_plan(
 ) -> DimensionText:
     if plan.orientation == "horizontal":
         sign = 1 if side == "top" else -1
-        dim_y = (
-            max(plan.p1[1], plan.p2[1])
-            if side == "top"
-            else min(plan.p1[1], plan.p2[1])
-        ) + sign * offset
+
+        base_y = (
+            plan.base_ref
+            if plan.base_ref is not None
+            else (
+                max(plan.p1[1], plan.p2[1])
+                if side == "top"
+                else min(plan.p1[1], plan.p2[1])
+            )
+        )
+        dim_y = base_y + sign * offset
+
         return DimensionText(
             x=(plan.p1[0] + plan.p2[0]) / 2,
             y=dim_y + sign * settings.text_gap,
@@ -427,10 +565,20 @@ def _dimension_text_for_plan(
             height=settings.text_height,
             anchor="middle",
         )
+
     sign = 1 if side == "right" else -1
-    dim_x = (
-        max(plan.p1[0], plan.p2[0]) if side == "right" else min(plan.p1[0], plan.p2[0])
-    ) + sign * offset
+
+    base_x = (
+        plan.base_ref
+        if plan.base_ref is not None
+        else (
+            max(plan.p1[0], plan.p2[0])
+            if side == "right"
+            else min(plan.p1[0], plan.p2[0])
+        )
+    )
+    dim_x = base_x + sign * offset
+
     return DimensionText(
         x=dim_x + sign * settings.text_gap,
         y=(plan.p1[1] + plan.p2[1]) / 2,
@@ -592,6 +740,9 @@ def _resolve_diameter_dimension_specs(
             label = f"{settings.diameter_symbol}{format_length(plan.radius * 2, settings.decimal_places)}"
 
         angle_candidates = [plan.leader_angle_deg, plan.leader_angle_deg + 180.0]
+        for step in (30, 60, 90, 120, 150):
+            angle_candidates.append(plan.leader_angle_deg + step)
+            angle_candidates.append(plan.leader_angle_deg - step)
         selected_angle = plan.leader_angle_deg
         if frame_bounds or avoid_bounds:
             for angle in angle_candidates:
@@ -624,11 +775,12 @@ def _generate_view_dimensions(
     dimension_overrides: dict[str, object] | None,
     frame_bounds: BoundingBox2D | None,
     avoid_bounds: list[BoundingBox2D] | None = None,
+    include_basic: bool = True,
 ) -> DimensionPlanOutput:
     """Plan all dimensions for a single view."""
     shapes = view.visible + view.hidden
     if not shapes:
-        return DimensionPlanOutput([], [])
+        return DimensionPlanOutput([], [], [])
 
     settings = _resolve_dimension_settings(
         shapes, dimension_settings, dimension_overrides
@@ -643,7 +795,7 @@ def _generate_view_dimensions(
     # Extract and plan feature dimensions
     primitives = extract_primitives(shapes)
     features = extract_feature_coordinates(primitives)
-    line_dims, diameter_dims, _ = _plan_feature_dimensions(
+    line_dims, diameter_dims, note_plans = _plan_feature_dimensions(
         features, config, settings, rules
     )
 
@@ -655,7 +807,13 @@ def _generate_view_dimensions(
         diameter_dims, settings, frame_bounds, avoid_bounds=avoid_bounds
     )
 
-    return DimensionPlanOutput(basic_specs + line_specs, diameter_specs)
+    note_specs = _resolve_leader_note_specs(
+        note_plans,
+        frame_bounds=frame_bounds,
+        avoid_bounds=avoid_bounds,
+    )
+
+    return DimensionPlanOutput(basic_specs + line_specs, diameter_specs, note_specs)
 
 
 def _view_configs_for_layout(
@@ -709,6 +867,7 @@ def _build_layers(
     layers: dict[str, list[Shape]] = {}
     linear_dims: list[LinearDimensionSpec] = []
     diameter_dims: list[DiameterDimensionSpec] = []
+    notes: list[LeaderNoteSpec] = []
 
     # Project and layout the three views
     template_offset_x = template_spec.layout_offset_mm[0] if template_spec else 0.0
@@ -778,9 +937,11 @@ def _build_layers(
                 dimension_overrides,
                 frame_bounds,
                 avoid_bounds=view_avoid,
+                include_basic=(index == 0),
             )
             linear_dims.extend(output.linear)
             diameter_dims.extend(output.diameter)
+            notes.extend(output.leader_notes)
 
     # Add template layer
     if add_template and isinstance(template_spec, SvgTemplateSpec):
@@ -791,7 +952,7 @@ def _build_layers(
             for shape in template
         ]
 
-    return layers, DimensionPlanOutput(linear_dims, diameter_dims)
+    return layers, DimensionPlanOutput(linear_dims, diameter_dims, notes)
 
 
 def _page_size_from_layers(
@@ -840,6 +1001,9 @@ def _export_outputs(
 
     if dimension_plans.linear or dimension_plans.diameter:
         add_ezdxf_dimensions(doc, dimension_plans.linear, dimension_plans.diameter)
+
+    if dimension_plans.leader_notes:
+        add_ezdxf_leader_notes(doc, dimension_plans.leader_notes)
 
     needs_svg = any(
         os.path.splitext(path)[1].lower() in {".svg", ".png", ".jpg", ".jpeg"}

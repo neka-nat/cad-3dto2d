@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from build123d import ExportDXF, LineType, Unit
+import math
+
 import ezdxf
+from build123d import ExportDXF, LineType, Unit
 from ezdxf.addons.drawing import Frontend, RenderContext, layout
 from ezdxf.addons.drawing.config import BackgroundPolicy, Configuration
 from ezdxf.addons.drawing.svg import SVGBackend
@@ -10,6 +12,7 @@ from ezdxf.enums import TextEntityAlignment
 from ..annotations.dimensions import (
     DiameterDimensionSpec,
     DimensionSettings,
+    LeaderNoteSpec,
     LinearDimensionSpec,
 )
 from ..templates import (
@@ -403,3 +406,59 @@ def render_dxf_to_svg(
     )
     Frontend(ctx, backend, config=config).draw_layout(doc.modelspace(), finalize=True)
     return backend.get_string(page)
+
+
+def add_ezdxf_leader_notes(
+    doc: "ezdxf.document.Drawing",
+    notes: list[LeaderNoteSpec],
+    layer_name: str = "notes",
+) -> None:
+    if not notes:
+        return
+    if not doc.layers.has_entry(layer_name):
+        doc.layers.new(layer_name, dxfattribs={"linetype": "CONTINUOUS"})
+
+    msp = doc.modelspace()
+
+    for note in notes:
+        s = note.settings
+        ang = math.radians(note.angle)
+        dx = math.cos(ang)
+        dy = math.sin(ang)
+
+        # leaderの長さ（だいたい）
+        leader_len = s.arrow_size * 4 + s.text_gap * 2 + s.text_height
+
+        tip = note.target
+        end = (tip[0] + dx * leader_len, tip[1] + dy * leader_len)
+
+        # leader線
+        msp.add_line(tip, end, dxfattribs={"layer": layer_name})
+
+        # 簡易矢印（V字）
+        a1 = ang + math.radians(150)
+        a2 = ang - math.radians(150)
+        p1 = (
+            tip[0] + math.cos(a1) * s.arrow_size,
+            tip[1] + math.sin(a1) * s.arrow_size,
+        )
+        p2 = (
+            tip[0] + math.cos(a2) * s.arrow_size,
+            tip[1] + math.sin(a2) * s.arrow_size,
+        )
+        msp.add_line(tip, p1, dxfattribs={"layer": layer_name})
+        msp.add_line(tip, p2, dxfattribs={"layer": layer_name})
+
+        # テキスト位置
+        text_pos = (end[0] + dx * s.text_gap, end[1] + dy * s.text_gap)
+        align = (
+            TextEntityAlignment.MIDDLE_LEFT
+            if dx >= 0
+            else TextEntityAlignment.MIDDLE_RIGHT
+        )
+
+        t = msp.add_text(
+            note.text,
+            dxfattribs={"height": s.text_height, "layer": layer_name},
+        )
+        t.set_placement(text_pos, align=align)
